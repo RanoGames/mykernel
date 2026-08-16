@@ -82,7 +82,7 @@ $(USER_BLOB): $(USER_ELF)
 
 $(LIBHELLO_SO): $(USER_DIR)/libhello.c $(USER_DIR)/libhello.ld | $(BUILD_DIR)
 	$(CC) $(USER_PIC_CFLAGS) -shared -nostdlib -Wl,--build-id=none \
-		-T $(USER_DIR)/libhello.ld -o $@ $(USER_DIR)/libhello.c
+		-T $(USER_DIR)/libhello.ld -Wl,-soname,libhello.so -o $@ $(USER_DIR)/libhello.c
 
 $(LIBHELLO_BLOB): $(LIBHELLO_SO)
 	$(OBJCOPY) -O elf32-i386 -B i386 -I binary $< $@
