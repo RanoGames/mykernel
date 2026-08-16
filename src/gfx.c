@@ -328,3 +328,8 @@ void gfx_vline(int x, int y, int h, uint8_t color) {
 int gfx_is_graphics(void) {
     return g_graphics;
 }
+
+const uint8_t* gfx_font_glyph(unsigned char c) {
+    if (c >= 128) c = '?';
+    return font8x16[c];
+}
