@@ -91,9 +91,17 @@ void terminal_putchar(char c) {
 void terminal_backspace(void) {
     if (terminal_column == 0)
         return;
+
     terminal_column--;
     terminal_putentryat(' ', terminal_color, terminal_column, terminal_row);
     update_cursor(terminal_column, terminal_row);
+
+    /* В serial/терминале символ сам не исчезает — нужно явно:
+     * назад, пробел (стереть), снова назад. Без этого в -nographic
+     * Backspace «не работает», хотя буфер shell уже правильный. */
+    serial_putchar('\b');
+    serial_putchar(' ');
+    serial_putchar('\b');
 }
 
 void terminal_hide_cursor(void) {
