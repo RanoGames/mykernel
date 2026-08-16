@@ -33,7 +33,7 @@ else
 endif
 
 ASM_SOURCES = boot.s gdt_flush.s idt_load.s isr.s context_switch.s
-C_SOURCES   = kernel.c gdt.c serial.c vga.c idt.c irq.c keyboard.c shell.c fs.c calc.c syscall.c elf.c process.c ata.c fat32.c kmalloc.c mlang.c timer.c sched.c dyld.c
+C_SOURCES   = kernel.c gdt.c serial.c vga.c idt.c irq.c keyboard.c shell.c fs.c calc.c syscall.c elf.c process.c ata.c fat32.c kmalloc.c mlang.c timer.c sched.c dyld.c gfx.c mouse.c snake.c
 
 ASM_OBJECTS = $(ASM_SOURCES:%.s=$(BUILD_DIR)/%.o)
 C_OBJECTS   = $(C_SOURCES:%.c=$(BUILD_DIR)/%.o)
@@ -80,7 +80,6 @@ $(USER_ELF): $(USER_DIR)/hello.c $(USER_DIR)/linker.ld $(USER_LIB_OBJS) | $(BUIL
 $(USER_BLOB): $(USER_ELF)
 	$(OBJCOPY) -O elf32-i386 -B i386 -I binary $< $@
 
-/* shared library */
 $(LIBHELLO_SO): $(USER_DIR)/libhello.c $(USER_DIR)/libhello.ld | $(BUILD_DIR)
 	$(CC) $(USER_PIC_CFLAGS) -shared -nostdlib -Wl,--build-id=none \
 		-T $(USER_DIR)/libhello.ld -o $@ $(USER_DIR)/libhello.c
@@ -88,7 +87,6 @@ $(LIBHELLO_SO): $(USER_DIR)/libhello.c $(USER_DIR)/libhello.ld | $(BUILD_DIR)
 $(LIBHELLO_BLOB): $(LIBHELLO_SO)
 	$(OBJCOPY) -O elf32-i386 -B i386 -I binary $< $@
 
-/* dynamically linked program */
 $(DYNHELLO_ELF): $(USER_DIR)/dynhello.c $(USER_DIR)/dynhello.ld $(LIBHELLO_SO) | $(BUILD_DIR)
 	$(CC) $(USER_PIC_CFLAGS) -nostdlib -Wl,--build-id=none \
 		-T $(USER_DIR)/dynhello.ld \
