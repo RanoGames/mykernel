@@ -12,6 +12,7 @@
 #include "syscall.h"
 #include "timer.h"
 #include "sched.h"
+#include "dyld.h"
 #include "shell.h"
 
 void kernel_main(void) {
@@ -30,8 +31,9 @@ void kernel_main(void) {
     irq_install();
     keyboard_init();
     fs_init();
+    dyld_install_lib_tree(); /* /lib/libhello.so, /bin/dynhello */
     sched_init();
-    timer_init(100); /* 100 Hz, IRQ0 → планировщик */
+    timer_init(100);
 
     if (ata_init() == 0)
         terminal_writestring("ATA: disk detected (use fatmount)\n");
@@ -40,7 +42,7 @@ void kernel_main(void) {
 
     __asm__ volatile ("sti");
 
-    terminal_writestring("Subsystems ready (scheduler on).\n");
+    terminal_writestring("Subsystems ready (dyld + scheduler).\n");
 
     shell_run();
 }
