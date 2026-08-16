@@ -1,4 +1,4 @@
-/* shell.c — оболочка: RAM FS, scripts, ELF, FAT32 */
+/* shell.c — оболочка: RAM FS, scripts, ELF, FAT32 R/W */
 
 #include "shell.h"
 #include "vga.h"
@@ -174,7 +174,7 @@ static void cmd_help(void) {
     terminal_writestring("System: help clear echo about uname whoami free history\n");
     terminal_writestring("        reboot shutdown calc <expr>\n");
     terminal_writestring("RAM FS: ls pwd cd mkdir touch cat rm write append cp mv\n");
-    terminal_writestring("FAT32:  fatmount  fatinfo  fatls [path]  fatcat <file>\n");
+    terminal_writestring("FAT32:  fatmount fatinfo fatls fatcat <f> fatwrite <f> <text>\n");
     terminal_writestring("Programs: run <script> | exec hello\n");
 }
 
@@ -361,12 +361,25 @@ static void cmd_fatcat(const char* path) {
     if (r != FAT_OK) print_fat_error(r);
 }
 
+static void cmd_fatwrite(const char* args) {
+    char name[16];
+    const char* text;
+    if (!split_name_and_rest(args, name, sizeof(name), &text) || text[0] == '\0') {
+        terminal_writestring("Usage: fatwrite NOTE.TXT hello world\n");
+        terminal_writestring("(8.3 name, file in FAT root, max 4KB)\n");
+        return;
+    }
+    enum fat_result r = fat32_write(name, text);
+    if (r != FAT_OK) print_fat_error(r);
+    else terminal_writestring("OK\n");
+}
+
 static void execute_command(const char* line) {
     if (line[0] == '\0') return;
     else if (str_equals(line, "help")) cmd_help();
     else if (str_equals(line, "clear")) terminal_initialize();
     else if (str_equals(line, "about"))
-        terminal_writestring("MyKernel -- ELF + syscalls + FAT32 (read-only)\n");
+        terminal_writestring("MyKernel -- ELF + syscalls + FAT32 R/W\n");
     else if (str_equals(line, "reboot")) cmd_reboot();
     else if (str_equals(line, "shutdown")) cmd_shutdown();
     else if (str_equals(line, "uname")) cmd_uname();
@@ -399,6 +412,8 @@ static void execute_command(const char* line) {
     else if (str_equals(line, "fatls")) cmd_fatls("/");
     else if (str_starts_with(line, "fatcat ")) cmd_fatcat(line + 7);
     else if (str_equals(line, "fatcat")) cmd_fatcat("");
+    else if (str_starts_with(line, "fatwrite ")) cmd_fatwrite(line + 9);
+    else if (str_equals(line, "fatwrite")) cmd_fatwrite("");
     else {
         terminal_writestring("Unknown command: ");
         terminal_writestring(line);
@@ -409,7 +424,7 @@ static void execute_command(const char* line) {
 void shell_run(void) {
     char line[CMD_BUFFER_SIZE];
     char path[PWD_BUFFER_SIZE];
-    terminal_writestring("\nMyKernel. help | fatmount | exec hello\n");
+    terminal_writestring("\nMyKernel. help | fatmount | fatwrite | exec hello\n");
     for (;;) {
         fs_pwd(path, sizeof(path));
         terminal_writestring(path);
