@@ -1,21 +1,17 @@
-# Remaining fixes
+# Fixes
 
-Already on `main`:
-- `timer.c` / `timer.h` — PIT 100 Hz, `timer_hz()`
-- `kernel.c` — `vbetest` typo, boot message
+## Already on main (git pull)
+- `src/timer.c`, `src/timer.h` — PIT 100 Hz, `timer_hz()`
+- `src/kernel.c` — typo `vbtest`→`vbetest`, boot message
 - `Makefile` — `-soname libhello.so`
-- `dyld.h` — comment fix
+- `src/dyld.h` — comment fix
 
-Apply the rest:
+## Apply remaining (dynhello, snake, Tab, system VBE console)
 
 ```bash
-# after git pull, if fixes/ is present:
-bash fixes/apply.sh
+git pull
+bash fixes/decode_and_apply.sh   # needs fixes/*.z64 files
 make clean && make
 ```
 
-Or copy from this directory:
-- `fixes/dyld.c` — full dynamic linker (fixes dynhello Invalid Opcode)
-- `fixes/snake.c` — speed, pending turns, GAME OVER
-- `fixes/shell.c` — Tab completion
-- `fixes/settings.c` — system-wide VBE console
+If `.z64` files are missing, use tarball from the chat or wait for next push of `fixes/*.z64`.
