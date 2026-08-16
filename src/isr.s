@@ -1,29 +1,10 @@
-/* isr.s — низкоуровневые "заглушки" обработчиков прерываний.
- *
- * Почему нельзя просто указать в IDT адрес C-функции напрямую:
- * когда прерывание срабатывает, процессор сам кладёт в стек часть
- * регистров, но не все, и не знает, что мы хотим сохранить остальные
- * регистры перед вызовом C-кода и восстановить после (иначе мы
- * сломаем то, что выполнялось до прерывания). Поэтому у каждого
- * прерывания — маленькая ассемблерная заглушка, которая:
- *   1. сохраняет регистры,
- *   2. вызывает общий обработчик на C,
- *   3. восстанавливает регистры,
- *   4. возвращает управление инструкцией iret.
- *
- * Обработчики исключений процессора: номера 0-31 (деление на 0,
- * page fault и т.д.) — они нужны, чтобы ядро не падало в "чёрную
- * дыру" при ошибке, а хотя бы могло вывести сообщение.
- *
- * Обработчики аппаратных прерываний (IRQ 0-15) переносим на номера
- * 32-47 таблицы IDT (это делает irq.c, перепрограммируя PIC) —
- * иначе они конфликтуют с исключениями процессора 0-31. */
+/* isr.s — заглушки ISR/IRQ + int 0x80 (syscall). */
 
 .macro ISR_NOERRCODE num
 .global isr\num
 isr\num:
     cli
-    push $0        /* этому исключению процессор не кладёт код ошибки — кладём 0 сами, чтобы стек был одинаковой формы для всех обработчиков */
+    push $0
     push $\num
     jmp isr_common_stub
 .endm
@@ -32,7 +13,7 @@ isr\num:
 .global isr\num
 isr\num:
     cli
-    push $\num     /* код ошибки этому исключению процессор уже положил сам */
+    push $\num
     jmp isr_common_stub
 .endm
 
@@ -45,33 +26,32 @@ irq\num:
     jmp irq_common_stub
 .endm
 
-/* Исключения процессора 0-31. Часть из них кладёт код ошибки в стек
- * сама (ERRCODE), часть — нет (NOERRCODE), это фиксировано в архитектуре x86. */
-ISR_NOERRCODE 0    /* Division by zero */
-ISR_NOERRCODE 1    /* Debug */
-ISR_NOERRCODE 2    /* Non maskable interrupt */
-ISR_NOERRCODE 3    /* Breakpoint */
-ISR_NOERRCODE 4    /* Overflow */
-ISR_NOERRCODE 5    /* Bound range exceeded */
-ISR_NOERRCODE 6    /* Invalid opcode */
-ISR_NOERRCODE 7    /* Device not available */
-ISR_ERRCODE   8    /* Double fault */
-ISR_NOERRCODE 9    /* Coprocessor segment overrun */
-ISR_ERRCODE   10   /* Invalid TSS */
-ISR_ERRCODE   11   /* Segment not present */
-ISR_ERRCODE   12   /* Stack-segment fault */
-ISR_ERRCODE   13   /* General protection fault */
-ISR_ERRCODE   14   /* Page fault */
-ISR_NOERRCODE 15   /* зарезервировано */
-ISR_NOERRCODE 16   /* x87 floating point exception */
-ISR_ERRCODE   17   /* Alignment check */
-ISR_NOERRCODE 18   /* Machine check */
-ISR_NOERRCODE 19   /* SIMD floating point exception */
+ISR_NOERRCODE 0
+ISR_NOERRCODE 1
+ISR_NOERRCODE 2
+ISR_NOERRCODE 3
+ISR_NOERRCODE 4
+ISR_NOERRCODE 5
+ISR_NOERRCODE 6
+ISR_NOERRCODE 7
+ISR_ERRCODE   8
+ISR_NOERRCODE 9
+ISR_ERRCODE   10
+ISR_ERRCODE   11
+ISR_ERRCODE   12
+ISR_ERRCODE   13
+ISR_ERRCODE   14
+ISR_NOERRCODE 15
+ISR_NOERRCODE 16
+ISR_ERRCODE   17
+ISR_NOERRCODE 18
+ISR_NOERRCODE 19
 
-/* Аппаратные IRQ 0-15 (таймер, клавиатура и т.д.), после перемаппинга
- * PIC поставлены в IDT под номера 32-47 */
-IRQ 0, 32   /* таймер (PIT) */
-IRQ 1, 33   /* клавиатура */
+/* syscall: int 0x80 → вектор 128 */
+ISR_NOERRCODE 128
+
+IRQ 0, 32
+IRQ 1, 33
 IRQ 2, 34
 IRQ 3, 35
 IRQ 4, 36
@@ -87,37 +67,49 @@ IRQ 13, 45
 IRQ 14, 46
 IRQ 15, 47
 
-/* Общая часть для исключений: сохраняем регистры, зовём C-функцию
- * isr_handler(struct registers*), восстанавливаем регистры, выходим */
 .extern isr_handler
+.extern syscall_handler
+
 isr_common_stub:
-    pusha              /* сохранить eax,ecx,edx,ebx,esp,ebp,esi,edi одной инструкцией */
+    pusha
 
     mov %ds, %ax
-    push %eax          /* сохранить сегмент данных */
+    push %eax
 
-    mov $0x10, %ax     /* переключиться на сегмент данных ядра (0x10 — из GDT, которую нам дал GRUB) */
+    mov $0x10, %ax
     mov %ax, %ds
     mov %ax, %es
     mov %ax, %fs
     mov %ax, %gs
 
-    push %esp          /* передаём C-функции указатель на структуру со всеми сохранёнными регистрами */
+    push %esp
+
+    /* int_no лежит после pusha (8 regs) + ds = смещение 36 от текущего esp?
+     * Структура registers на стеке: после pusha и push ds, esp указывает на ds.
+     * int_no = offset после ds, edi..eax (8*4) → 4+32=36
+     * Проще: вызываем isr_handler всегда, а для 128 — из C не дойдём:
+     * перехватываем здесь. */
+    mov 36(%esp), %eax   /* int_no: ds(4) + pusha(32) = 36 */
+    cmp $128, %eax
+    jne 1f
+    call syscall_handler
+    jmp 2f
+1:
     call isr_handler
+2:
     add $4, %esp
 
-    pop %eax           /* восстановить исходный сегмент данных */
+    pop %eax
     mov %ax, %ds
     mov %ax, %es
     mov %ax, %fs
     mov %ax, %gs
 
     popa
-    add $8, %esp       /* убрать со стека код ошибки и номер прерывания, которые сами туда клали */
+    add $8, %esp
     sti
-    iret               /* специальная инструкция возврата из прерывания */
+    iret
 
-/* То же самое, но для аппаратных IRQ — вызывает irq_handler вместо isr_handler */
 .extern irq_handler
 irq_common_stub:
     pusha
