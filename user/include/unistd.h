@@ -8,7 +8,6 @@
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
 
-/* Linux i386 numbers */
 #define __NR_exit  1
 #define __NR_read  3
 #define __NR_write 4
@@ -24,12 +23,12 @@ static inline int __syscall3(int n, int a, int b, int c) {
     return ret;
 }
 
-static inline ssize_t write(int fd, const void* buf, size_t count) {
-    return (ssize_t)__syscall3(__NR_write, fd, (int)buf, (int)count);
+static inline int write(int fd, const void* buf, size_t count) {
+    return __syscall3(__NR_write, fd, (int)(uintptr_t)buf, (int)count);
 }
 
-static inline ssize_t read(int fd, void* buf, size_t count) {
-    return (ssize_t)__syscall3(__NR_read, fd, (int)buf, (int)count);
+static inline int read(int fd, void* buf, size_t count) {
+    return __syscall3(__NR_read, fd, (int)(uintptr_t)buf, (int)count);
 }
 
 static inline void _exit(int status) {
