@@ -1,17 +1,17 @@
-/* snake.c — Змейка + звук PC Speaker */
+/* snake.c — без полного clear каждый кадр (нет мигания),
+ * без курсора мыши, рамка серая только 1px */
 
 #include "snake.h"
 #include "gfx.h"
 #include "keyboard.h"
-#include "mouse.h"
 #include "timer.h"
 #include "sound.h"
 #include "vga.h"
 #include <stdint.h>
 
 #define CELL 8
-#define GRID_W (GFX_WIDTH / CELL)
-#define GRID_H (GFX_HEIGHT / CELL)
+#define GRID_W (GFX_WIDTH / CELL)  /* 40 */
+#define GRID_H (GFX_HEIGHT / CELL) /* 25 */
 #define MAX_LEN 200
 
 static int sx[MAX_LEN], sy[MAX_LEN];
@@ -22,6 +22,10 @@ static int score;
 static int dead;
 static int death_sounded;
 static uint32_t rng;
+
+/* предыдущий хвост — чтобы стереть одну клетку */
+static int tail_x, tail_y;
+static int grew;
 
 static uint32_t rand_u(void) {
     rng = rng * 1103515245u + 12345u;
@@ -40,25 +44,40 @@ static void place_food(void) {
 }
 
 static void draw_cell(int gx, int gy, uint8_t color) {
-    gfx_fill_rect(gx * CELL, gy * CELL, CELL - 1, CELL - 1, color);
+    /* клетка целиком CELL×CELL — без щелей */
+    gfx_fill_rect(gx * CELL, gy * CELL, CELL, CELL, color);
 }
 
-static void draw_all(void) {
-    gfx_clear(GFX_BLACK);
+static void draw_border(void) {
+    /* тонкая серая рамка по краю экрана */
     gfx_hline(0, 0, GFX_WIDTH, GFX_DGRAY);
     gfx_hline(0, GFX_HEIGHT - 1, GFX_WIDTH, GFX_DGRAY);
     gfx_vline(0, 0, GFX_HEIGHT, GFX_DGRAY);
     gfx_vline(GFX_WIDTH - 1, 0, GFX_HEIGHT, GFX_DGRAY);
+}
 
+static void redraw_full(void) {
+    gfx_wait_vsync();
+    gfx_clear(GFX_BLACK);
+    draw_border();
     draw_cell(food_x, food_y, GFX_LRED);
     for (int i = 0; i < slen; i++)
         draw_cell(sx[i], sy[i], i == 0 ? GFX_LGREEN : GFX_GREEN);
+}
 
-    struct mouse_state ms;
-    mouse_get(&ms);
-    gfx_putpixel(ms.x, ms.y, GFX_WHITE);
-    gfx_putpixel(ms.x + 1, ms.y, GFX_WHITE);
-    gfx_putpixel(ms.x, ms.y + 1, GFX_WHITE);
+static void redraw_step(void) {
+    gfx_wait_vsync();
+    /* стереть старый хвост, если не выросли */
+    if (!grew)
+        draw_cell(tail_x, tail_y, GFX_BLACK);
+    /* новая голова */
+    draw_cell(sx[0], sy[0], GFX_LGREEN);
+    /* бывшая голова → тело */
+    if (slen > 1)
+        draw_cell(sx[1], sy[1], GFX_GREEN);
+    /* еда */
+    draw_cell(food_x, food_y, GFX_LRED);
+    draw_border();
 }
 
 static void step(void) {
@@ -77,6 +96,10 @@ static void step(void) {
             return;
         }
 
+    tail_x = sx[slen - 1];
+    tail_y = sy[slen - 1];
+    grew = 0;
+
     for (int i = slen; i > 0; i--) {
         sx[i] = sx[i - 1];
         sy[i] = sy[i - 1];
@@ -85,7 +108,10 @@ static void step(void) {
     sy[0] = ny;
 
     if (nx == food_x && ny == food_y) {
-        if (slen < MAX_LEN - 1) slen++;
+        if (slen < MAX_LEN - 1) {
+            slen++;
+            grew = 1;
+        }
         score++;
         place_food();
         sound_beep_coin();
@@ -96,7 +122,6 @@ void snake_run(void) {
     rng = timer_ticks() ^ 0xA5A5u;
     if (rng == 0) rng = 1;
 
-    mouse_set_bounds(GFX_WIDTH, GFX_HEIGHT);
     gfx_init_mode13();
     sound_beep_ok();
 
@@ -111,6 +136,7 @@ void snake_run(void) {
     dead = 0;
     death_sounded = 0;
     place_food();
+    redraw_full();
 
     uint32_t last = timer_ticks();
     int running = 1;
@@ -131,6 +157,7 @@ void snake_run(void) {
                 dir_x = 1; dir_y = 0;
                 score = 0; dead = 0; death_sounded = 0;
                 place_food();
+                redraw_full();
                 sound_beep_ok();
             }
             int ndx = dir_x, ndy = dir_y;
@@ -144,28 +171,23 @@ void snake_run(void) {
             }
         }
 
-        struct mouse_event mev;
-        while (mouse_poll_event(&mev))
-            ;
-
         uint32_t now = timer_ticks();
-        if (!dead && now - last >= 15u) {
+        if (!dead && now - last >= 12u) {
             last = now;
             step();
-        }
-
-        draw_all();
-
-        if (dead) {
-            gfx_fill_rect(80, 90, 160, 20, GFX_RED);
-            if (!death_sounded) {
-                sound_beep_err();
-                death_sounded = 1;
+            if (!dead)
+                redraw_step();
+            else {
+                gfx_wait_vsync();
+                gfx_fill_rect(80, 90, 160, 20, GFX_RED);
+                if (!death_sounded) {
+                    sound_beep_err();
+                    death_sounded = 1;
+                }
             }
         }
 
-        for (volatile int i = 0; i < 50000; i++)
-            ;
+        __asm__ volatile ("hlt");
     }
 
     sound_stop();
