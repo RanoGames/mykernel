@@ -1,4 +1,4 @@
-/* shell.c — includes snake + beep + settings + vbe */
+/* shell.c — includes snake + pong + beep + settings + vbe */
 
 #include "shell.h"
 #include "vga.h"
@@ -17,6 +17,7 @@
 #include "ac97.h"
 #include "settings.h"
 #include "vbe.h"
+#include "pong.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -188,7 +189,7 @@ static void cmd_help(void) {
     terminal_writestring("FAT32:  fatmount fatinfo fatls fatcat fatwrite\n");
     terminal_writestring("Lang:   lang | lang <file>\n");
     terminal_writestring("Tasks:  ps  spawn\n");
-    terminal_writestring("Games:  snake  beep [freq|err|coin]\n");
+    terminal_writestring("Games:  snake  pong  beep [freq|err|coin]\n");
     terminal_writestring("PCI:    lspci  beep97 [freq]\n");
     terminal_writestring("Programs: exec hello | exec dynhello\n");
     terminal_writestring("Config: settings  vbetest\n");
@@ -421,6 +422,11 @@ static void cmd_snake(void) {
     snake_run();
 }
 
+static void cmd_pong(void) {
+    terminal_writestring("Pong: W/S left, arrows right, Q=quit\n");
+    pong_run();
+}
+
 static void cmd_ps(void) {
     terminal_writestring("ticks=");
     terminal_write_uint(timer_ticks());
@@ -450,7 +456,7 @@ static void cmd_lang(const char* arg) {
         mlang_exec_script(content);
         return;
     }
-    terminal_writestring("MyLang — 'quit' to exit\n");
+    terminal_writestring("MyLang - quit to exit\n");
     mlang_reset();
     char line[CMD_BUFFER_SIZE];
     char script[1024];
@@ -494,7 +500,7 @@ static void execute_command(const char* line) {
     else if (str_equals(line, "help")) cmd_help();
     else if (str_equals(line, "clear")) terminal_initialize();
     else if (str_equals(line, "about"))
-        terminal_writestring("MyKernel -- gfx + VBE + settings + snake\n");
+        terminal_writestring("MyKernel -- gfx + VBE + settings + snake + pong\n");
     else if (str_equals(line, "reboot")) cmd_reboot();
     else if (str_equals(line, "shutdown")) cmd_shutdown();
     else if (str_equals(line, "uname")) cmd_uname();
@@ -534,6 +540,7 @@ static void execute_command(const char* line) {
     else if (str_equals(line, "ps")) cmd_ps();
     else if (str_equals(line, "spawn")) cmd_spawn();
     else if (str_equals(line, "snake")) cmd_snake();
+    else if (str_equals(line, "pong")) cmd_pong();
     else if (str_starts_with(line, "beep ")) cmd_beep(line + 5);
     else if (str_equals(line, "beep")) cmd_beep("");
     else if (str_equals(line, "lspci")) cmd_lspci();
@@ -551,7 +558,7 @@ static void execute_command(const char* line) {
 void shell_run(void) {
     char line[CMD_BUFFER_SIZE];
     char path[PWD_BUFFER_SIZE];
-    terminal_writestring("\nMyKernel. help | settings | vbetest | snake\n");
+    terminal_writestring("\nMyKernel. help | settings | vbetest | snake | pong\n");
     for (;;) {
         fs_pwd(path, sizeof(path));
         terminal_writestring(path);
