@@ -34,6 +34,7 @@ void gfx_hline(int x, int y, int w, uint8_t color);
 void gfx_vline(int x, int y, int h, uint8_t color);
 void gfx_wait_vsync(void);
 void gfx_set_default_palette(void);
+int gfx_is_graphics(void);
 
 const uint8_t* gfx_font_glyph(unsigned char c);
 
