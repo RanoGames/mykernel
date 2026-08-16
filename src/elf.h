@@ -7,7 +7,9 @@
 #include <stddef.h>
 
 #define ELF_LOAD_BASE 0x400000u
-#define ELF_LOAD_MAX  0x100000u /* до 1 МБ под программу */
+#define ELF_LOAD_MAX  0x4000000u /* до 64 МБ (0x400000..0x4400000) */
+#define ELF_LINUX_BASE 0x08048000u
+#define ELF_LINUX_MAX  0x00800000u /* 8 МБ от linux base */
 
 enum elf_result {
     ELF_OK = 0,
