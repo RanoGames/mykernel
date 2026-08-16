@@ -1,4 +1,4 @@
-/* shell.c — оболочка: RAM FS, scripts, ELF, FAT32, kmalloc stats */
+/* shell.c — RAM FS, ELF, FAT32, MyLang */
 
 #include "shell.h"
 #include "vga.h"
@@ -8,6 +8,7 @@
 #include "process.h"
 #include "fat32.h"
 #include "kmalloc.h"
+#include "mlang.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -175,6 +176,7 @@ static void cmd_help(void) {
     terminal_writestring("        reboot shutdown calc <expr>\n");
     terminal_writestring("RAM FS: ls pwd cd mkdir touch cat rm write append cp mv\n");
     terminal_writestring("FAT32:  fatmount fatinfo fatls fatcat fatwrite\n");
+    terminal_writestring("Lang:   lang | lang <file>   (MyLang interpreter)\n");
     terminal_writestring("Programs: run <script> | exec hello\n");
 }
 
@@ -379,12 +381,75 @@ static void cmd_fatwrite(const char* args) {
     else terminal_writestring("OK\n");
 }
 
+/* MyLang: интерактивно или из файла RAM FS */
+static void cmd_lang(const char* arg) {
+    if (arg[0] != '\0') {
+        const char* content;
+        size_t len;
+        enum fs_result r = fs_read(arg, &content, &len);
+        if (r != FS_OK) { print_fs_error(r); return; }
+        mlang_reset();
+        mlang_exec_script(content);
+        return;
+    }
+
+    terminal_writestring("MyLang — type lines, 'quit' to exit\n");
+    terminal_writestring("  x = 2 + 2\n  print x\n  print \"hi\"\n");
+    terminal_writestring("  if x > 1\n    print \"yes\"\n  end\n");
+    terminal_writestring("  while x > 0\n    print x\n    x = x - 1\n  end\n");
+
+    mlang_reset();
+    char line[CMD_BUFFER_SIZE];
+    /* multi-line buffer for if/while */
+    char script[1024];
+    size_t so = 0;
+    int depth = 0;
+
+    for (;;) {
+        terminal_writestring(depth ? "... " : "lang> ");
+        read_line(line, CMD_BUFFER_SIZE);
+        if (str_equals(line, "quit") || str_equals(line, "exit"))
+            break;
+
+        const char* p = line;
+        while (*p == ' ' || *p == '\t') p++;
+
+        if (depth == 0 &&
+            !((p[0] == 'i' && p[1] == 'f' && (p[2] == ' ' || p[2] == '\t')) ||
+              (p[0] == 'w' && p[1] == 'h' && p[2] == 'i' && p[3] == 'l' && p[4] == 'e'))) {
+            mlang_exec_line(line);
+            continue;
+        }
+
+        /* накапливаем блок */
+        size_t len = str_len(line);
+        if (so + len + 2 < sizeof(script)) {
+            for (size_t i = 0; i < len; i++) script[so++] = line[i];
+            script[so++] = '\n';
+            script[so] = '\0';
+        }
+
+        if ((p[0] == 'i' && p[1] == 'f' && (p[2] == ' ' || p[2] == '\t')) ||
+            (p[0] == 'w' && p[1] == 'h' && p[2] == 'i' && p[3] == 'l' && p[4] == 'e'))
+            depth++;
+        else if (str_equals(p, "end")) {
+            depth--;
+            if (depth <= 0) {
+                depth = 0;
+                mlang_exec_script(script);
+                so = 0;
+                script[0] = '\0';
+            }
+        }
+    }
+}
+
 static void execute_command(const char* line) {
     if (line[0] == '\0') return;
     else if (str_equals(line, "help")) cmd_help();
     else if (str_equals(line, "clear")) terminal_initialize();
     else if (str_equals(line, "about"))
-        terminal_writestring("MyKernel -- kmalloc + brk + ELF + FAT32\n");
+        terminal_writestring("MyKernel -- syscalls + MyLang + ELF + FAT32\n");
     else if (str_equals(line, "reboot")) cmd_reboot();
     else if (str_equals(line, "shutdown")) cmd_shutdown();
     else if (str_equals(line, "uname")) cmd_uname();
@@ -419,6 +484,8 @@ static void execute_command(const char* line) {
     else if (str_equals(line, "fatcat")) cmd_fatcat("");
     else if (str_starts_with(line, "fatwrite ")) cmd_fatwrite(line + 9);
     else if (str_equals(line, "fatwrite")) cmd_fatwrite("");
+    else if (str_starts_with(line, "lang ")) cmd_lang(line + 5);
+    else if (str_equals(line, "lang")) cmd_lang("");
     else {
         terminal_writestring("Unknown command: ");
         terminal_writestring(line);
@@ -429,7 +496,7 @@ static void execute_command(const char* line) {
 void shell_run(void) {
     char line[CMD_BUFFER_SIZE];
     char path[PWD_BUFFER_SIZE];
-    terminal_writestring("\nMyKernel. help | free | exec hello\n");
+    terminal_writestring("\nMyKernel. help | lang | exec hello\n");
     for (;;) {
         fs_pwd(path, sizeof(path));
         terminal_writestring(path);
