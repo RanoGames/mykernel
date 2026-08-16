@@ -10,6 +10,8 @@
 #include "ata.h"
 #include "kmalloc.h"
 #include "syscall.h"
+#include "timer.h"
+#include "sched.h"
 #include "shell.h"
 
 void kernel_main(void) {
@@ -28,6 +30,8 @@ void kernel_main(void) {
     irq_install();
     keyboard_init();
     fs_init();
+    sched_init();
+    timer_init(100); /* 100 Hz, IRQ0 → планировщик */
 
     if (ata_init() == 0)
         terminal_writestring("ATA: disk detected (use fatmount)\n");
@@ -36,7 +40,7 @@ void kernel_main(void) {
 
     __asm__ volatile ("sti");
 
-    terminal_writestring("Subsystems ready.\n");
+    terminal_writestring("Subsystems ready (scheduler on).\n");
 
     shell_run();
 }
