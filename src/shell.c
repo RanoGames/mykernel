@@ -1,4 +1,4 @@
-/* shell.c — оболочка: RAM FS, scripts, ELF, FAT32 R/W */
+/* shell.c — оболочка: RAM FS, scripts, ELF, FAT32, kmalloc stats */
 
 #include "shell.h"
 #include "vga.h"
@@ -7,6 +7,7 @@
 #include "calc.h"
 #include "process.h"
 #include "fat32.h"
+#include "kmalloc.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -102,7 +103,6 @@ static void read_line(char* buffer, size_t max_len) {
     terminal_get_cursor(&prompt_x, &prompt_y);
     buffer[0] = '\0';
     history_pos = -1;
-
     for (;;) {
         char c = keyboard_getchar();
         if (c == KEY_ENTER) { terminal_putchar('\n'); buffer[len] = '\0'; break; }
@@ -174,7 +174,7 @@ static void cmd_help(void) {
     terminal_writestring("System: help clear echo about uname whoami free history\n");
     terminal_writestring("        reboot shutdown calc <expr>\n");
     terminal_writestring("RAM FS: ls pwd cd mkdir touch cat rm write append cp mv\n");
-    terminal_writestring("FAT32:  fatmount fatinfo fatls fatcat <f> fatwrite <f> <text>\n");
+    terminal_writestring("FAT32:  fatmount fatinfo fatls fatcat fatwrite\n");
     terminal_writestring("Programs: run <script> | exec hello\n");
 }
 
@@ -207,7 +207,13 @@ static void cmd_uname(void) { terminal_writestring("MyKernel i686 GNU/MyKernel\n
 static void cmd_whoami(void) { terminal_writestring("root\n"); }
 
 static void cmd_free(void) {
-    terminal_writestring("RAM FS nodes used: ");
+    size_t used, total, freeb;
+    kmalloc_stats(&used, &total, &freeb);
+    terminal_writestring("Kernel heap:\n");
+    terminal_writestring("  used:  "); terminal_write_uint((uint32_t)used); terminal_writestring(" bytes\n");
+    terminal_writestring("  free:  "); terminal_write_uint((uint32_t)freeb); terminal_writestring(" bytes\n");
+    terminal_writestring("  total: "); terminal_write_uint((uint32_t)total); terminal_writestring(" bytes\n");
+    terminal_writestring("RAM FS nodes: ");
     terminal_write_uint((uint32_t)fs_node_count());
     terminal_writestring(" / 256\n");
 }
@@ -366,7 +372,6 @@ static void cmd_fatwrite(const char* args) {
     const char* text;
     if (!split_name_and_rest(args, name, sizeof(name), &text) || text[0] == '\0') {
         terminal_writestring("Usage: fatwrite NOTE.TXT hello world\n");
-        terminal_writestring("(8.3 name, file in FAT root, max 4KB)\n");
         return;
     }
     enum fat_result r = fat32_write(name, text);
@@ -379,7 +384,7 @@ static void execute_command(const char* line) {
     else if (str_equals(line, "help")) cmd_help();
     else if (str_equals(line, "clear")) terminal_initialize();
     else if (str_equals(line, "about"))
-        terminal_writestring("MyKernel -- ELF + syscalls + FAT32 R/W\n");
+        terminal_writestring("MyKernel -- kmalloc + brk + ELF + FAT32\n");
     else if (str_equals(line, "reboot")) cmd_reboot();
     else if (str_equals(line, "shutdown")) cmd_shutdown();
     else if (str_equals(line, "uname")) cmd_uname();
@@ -424,7 +429,7 @@ static void execute_command(const char* line) {
 void shell_run(void) {
     char line[CMD_BUFFER_SIZE];
     char path[PWD_BUFFER_SIZE];
-    terminal_writestring("\nMyKernel. help | fatmount | fatwrite | exec hello\n");
+    terminal_writestring("\nMyKernel. help | free | exec hello\n");
     for (;;) {
         fs_pwd(path, sizeof(path));
         terminal_writestring(path);
