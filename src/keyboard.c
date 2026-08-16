@@ -1,11 +1,10 @@
-/* keyboard.c — драйвер клавиатуры для стандартного PS/2-контроллера.
+/* keyboard.c — драйвер PS/2-клавиатуры + ввод из serial (-nographic).
  *
- * Как это работает: при нажатии/отпускании клавиши контроллер
- * клавиатуры кладёт байт "скан-кода" в порт 0x60 и поднимает IRQ1.
- * Мы читаем этот байт в обработчике прерывания, переводим его в
- * обычный ASCII-символ по таблице (US-раскладка, "scan code set 1")
- * и складываем в собственный кольцевой буфер, откуда его потом
- * забирает shell функцией keyboard_getchar(). */
+ * При нажатии клавиши контроллер кладёт скан-код в порт 0x60 и
+ * поднимает IRQ1. Мы переводим его в ASCII и кладём в кольцевой буфер.
+ * Стрелки приходят как extended-последовательность: 0xE0 + скан-код.
+ *
+ * При запуске QEMU с -nographic дополнительно читаем символы из COM1. */
 
 #include "keyboard.h"
 #include "isr.h"
@@ -16,30 +15,27 @@
 
 #define KBD_DATA_PORT 0x60
 
-/* Если скан-код >= 0x80 — это код "клавиша отпущена" (break code),
- * а сам код клавиши = (скан-код - 0x80). Нам для простого ввода
- * текста интересны в основном нажатия, но отпускание Shift важно
- * отследить, чтобы вернуться к строчным буквам. */
 #define SC_RELEASE_MASK 0x80
+#define SC_EXTENDED     0xE0
 
 #define SC_LSHIFT 0x2A
 #define SC_RSHIFT 0x36
 
-/* Таблица перевода скан-кода в ASCII для обычного (без Shift) состояния.
- * Индекс — скан-код, значение — символ. 0 означает "не печатаемая клавиша"
- * (в этой простой версии драйвера мы её игнорируем). */
+#define SC_UP     0x48
+#define SC_DOWN   0x50
+#define SC_LEFT   0x4B
+#define SC_RIGHT  0x4D
+
 static const char scancode_to_ascii[128] = {
     0,  27, '1','2','3','4','5','6','7','8','9','0','-','=','\b',
     '\t','q','w','e','r','t','y','u','i','o','p','[',']','\n',
-    0 /*ctrl*/, 'a','s','d','f','g','h','j','k','l',';','\'','`',
-    0 /*lshift*/, '\\','z','x','c','v','b','n','m',',','.','/',
-    0 /*rshift*/, '*',
-    0 /*alt*/, ' ' /*space*/,
-    0 /*capslock*/,
-    /* дальше идут F1-F10, NumLock, ScrollLock и т.д. — не обрабатываем */
+    0, 'a','s','d','f','g','h','j','k','l',';','\'','`',
+    0, '\\','z','x','c','v','b','n','m',',','.','/',
+    0, '*',
+    0, ' ',
+    0,
 };
 
-/* То же самое, но при зажатом Shift */
 static const char scancode_to_ascii_shift[128] = {
     0,  27, '!','@','#','$','%','^','&','*','(',')','_','+','\b',
     '\t','Q','W','E','R','T','Y','U','I','O','P','{','}','\n',
@@ -51,35 +47,49 @@ static const char scancode_to_ascii_shift[128] = {
 };
 
 static volatile int shift_pressed = 0;
+static volatile int extended = 0;
 
-/* Простой кольцевой буфер для символов, которые ещё не забрал shell.
- * volatile — буфер меняется из обработчика прерывания, поэтому
- * компилятор не должен кэшировать его значения в регистрах. */
 #define KBD_BUFFER_SIZE 256
 static volatile char kbd_buffer[KBD_BUFFER_SIZE];
-static volatile size_t kbd_head = 0; /* куда пишем новый символ */
-static volatile size_t kbd_tail = 0; /* откуда читаем следующий символ */
+static volatile size_t kbd_head = 0;
+static volatile size_t kbd_tail = 0;
 
 static void kbd_buffer_push(char c) {
     size_t next = (kbd_head + 1) % KBD_BUFFER_SIZE;
     if (next == kbd_tail)
-        return; /* буфер переполнен — символ теряем (для учебного ядра ок) */
+        return;
     kbd_buffer[kbd_head] = c;
     kbd_head = next;
 }
 
-/* Обработчик IRQ1, вызывается автоматически из irq.c при каждом
- * нажатии/отпускании клавиши */
 static void keyboard_irq_handler(struct registers* regs) {
-    (void) regs; /* параметр не нужен, но нужен для совпадения типа irq_handler_t */
+    (void) regs;
 
     uint8_t scancode = inb(KBD_DATA_PORT);
 
+    if (scancode == SC_EXTENDED) {
+        extended = 1;
+        return;
+    }
+
+    int is_extended = extended;
+    extended = 0;
+
     if (scancode & SC_RELEASE_MASK) {
-        /* клавиша отпущена */
         uint8_t released = scancode & ~SC_RELEASE_MASK;
-        if (released == SC_LSHIFT || released == SC_RSHIFT)
+        if (!is_extended && (released == SC_LSHIFT || released == SC_RSHIFT))
             shift_pressed = 0;
+        return;
+    }
+
+    if (is_extended) {
+        switch (scancode) {
+            case SC_UP:    kbd_buffer_push(KEY_UP);    break;
+            case SC_DOWN:  kbd_buffer_push(KEY_DOWN);  break;
+            case SC_LEFT:  kbd_buffer_push(KEY_LEFT);  break;
+            case SC_RIGHT: kbd_buffer_push(KEY_RIGHT); break;
+            default: break;
+        }
         return;
     }
 
@@ -89,7 +99,7 @@ static void keyboard_irq_handler(struct registers* regs) {
     }
 
     if (scancode >= 128)
-        return; /* за пределами нашей таблицы — игнорируем */
+        return;
 
     char c = shift_pressed ? scancode_to_ascii_shift[scancode] : scancode_to_ascii[scancode];
     if (c != 0)
@@ -97,44 +107,49 @@ static void keyboard_irq_handler(struct registers* regs) {
 }
 
 void keyboard_init(void) {
-    irq_register_handler(1, keyboard_irq_handler); /* IRQ1 = клавиатура */
+    irq_register_handler(1, keyboard_irq_handler);
 }
 
 char keyboard_getchar(void) {
     for (;;) {
-        /* Источник 1: PS/2-клавиатура (обычное графическое окно QEMU).
-         * Символы туда кладёт обработчик прерывания keyboard_irq_handler. */
+        /* PS/2-клавиатура (графическое окно QEMU) */
         if (kbd_head != kbd_tail) {
             char c = kbd_buffer[kbd_tail];
             kbd_tail = (kbd_tail + 1) % KBD_BUFFER_SIZE;
             return c;
         }
 
-        /* Источник 2: последовательный порт (режим "-nographic" — когда
-         * графическое окно QEMU не используется вообще, а вы печатаете
-         * прямо в терминал WSL). Мы не завели под serial отдельное
-         * прерывание, поэтому проверяем его опросом (polling) —
-         * достаточно, т.к. человек печатает всё равно не быстрее, чем
-         * успевает выполниться этот цикл. */
+        /* Serial (режим -nographic) */
         if (serial_has_data()) {
             char c = serial_read_char();
 
-            /* Терминалы обычно шлют по Enter байт '\r' (0x0D), а не
-             * '\n' — приводим к единому формату, который понимает shell */
             if (c == '\r')
                 c = KEY_ENTER;
-            /* Некоторые терминалы шлют Backspace как DEL (0x7F) вместо
-             * привычного ASCII Backspace (0x08) — тоже нормализуем */
             else if (c == 0x7F)
                 c = KEY_BACKSPACE;
+            /* ANSI escape для стрелок: ESC [ A/B/C/D */
+            else if (c == 0x1B) {
+                /* ждём '[' */
+                if (!serial_has_data()) {
+                    /* одиночный ESC — игнорируем */
+                    continue;
+                }
+                char c2 = serial_read_char();
+                if (c2 != '[')
+                    continue;
+                if (!serial_has_data())
+                    continue;
+                char c3 = serial_read_char();
+                if (c3 == 'A') return KEY_UP;
+                if (c3 == 'B') return KEY_DOWN;
+                if (c3 == 'C') return KEY_RIGHT;
+                if (c3 == 'D') return KEY_LEFT;
+                continue;
+            }
 
             return c;
         }
 
-        /* Ничего не пришло ни оттуда, ни оттуда — ждём следующего
-         * прерывания (hlt экономнее пустого цикла while). Проснёмся
-         * либо от клавиатуры, либо просто от таймера — и в следующей
-         * итерации for(;;) снова проверим оба источника. */
         __asm__ volatile ("hlt");
     }
 }
