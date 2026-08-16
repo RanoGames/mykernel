@@ -3,8 +3,6 @@
  * Реальные: read/write/open/close/lseek/dup/dup2, brk, getpid/uid/gid,
  *           chdir/mkdir/unlink/rename/access/getcwd, time, yield, exit
  * Заглушки (-ENOSYS): fork, execve, pipe, mmap, signals, …
- *
- * Ошибки: return -errno (как Linux), не просто -1.
  */
 
 #include "syscall.h"
@@ -20,7 +18,6 @@
 #define USER_HEAP_MAX  0x600000u
 #define FD_MAX 32
 
-/* упрощённый struct stat (достаточно st_mode/st_size) */
 struct kernel_stat {
     uint32_t st_dev;
     uint16_t __pad1;
@@ -45,7 +42,6 @@ struct kernel_stat {
 };
 
 #define S_IFREG 0100000
-#define S_IFDIR 0040000
 #define S_IRUSR 0400
 #define S_IWUSR 0200
 #define S_IRGRP 040
@@ -68,7 +64,7 @@ static uint32_t user_brk = USER_HEAP_BASE;
 static uint32_t g_kernel_esp;
 static void* g_kernel_cont;
 static int g_exit_code;
-static uint32_t g_boot_epoch = 1700000000u; /* фиктивное «время» */
+static uint32_t g_boot_epoch = 1700000000u;
 
 void process_save_kernel_context(uint32_t esp, void* cont) {
     g_kernel_esp = esp;
@@ -145,22 +141,17 @@ static int sys_read(int fd, char* buf, int count) {
 
 static int sys_open(const char* path, int flags) {
     if (!path || !path[0]) return -ENOENT;
-
     const char* content = 0;
     size_t len = 0;
     enum fs_result r = fs_read(path, &content, &len);
-
     if (r != FS_OK) {
         if (flags & O_CREAT) {
             if (fs_touch(path) != FS_OK && fs_write(path, "") != FS_OK)
                 return -ENOENT;
             r = fs_read(path, &content, &len);
             if (r != FS_OK) return -ENOENT;
-        } else {
-            return -ENOENT;
-        }
+        } else return -ENOENT;
     }
-
     int fd = fd_alloc();
     if (fd < 0) return fd;
     fds[fd].used = 1;
@@ -208,8 +199,7 @@ static int sys_dup2(int oldfd, int newfd) {
     if (oldfd < 0 || oldfd >= FD_MAX || !fds[oldfd].used) return -EBADF;
     if (newfd < 0 || newfd >= FD_MAX) return -EBADF;
     if (oldfd == newfd) return newfd;
-    if (fds[newfd].used && newfd >= 3)
-        fds[newfd].used = 0;
+    if (fds[newfd].used && newfd >= 3) fds[newfd].used = 0;
     fds[newfd] = fds[oldfd];
     fds[newfd].used = 1;
     return newfd;
@@ -263,7 +253,6 @@ static int sys_access(const char* path, int mode) {
     if (!path) return -EFAULT;
     const char* c; size_t n;
     if (fs_read(path, &c, &n) == FS_OK) return 0;
-    /* maybe directory — try cd restore? skip */
     return -ENOENT;
 }
 
@@ -275,7 +264,7 @@ static int sys_getcwd(char* buf, size_t size) {
     while (tmp[i] && i + 1 < size) { buf[i] = tmp[i]; i++; }
     buf[i] = '\0';
     if (tmp[i]) return -ERANGE;
-    return (int)(i + 1); /* Linux getcwd returns pointer; i386 quirk — we return length */
+    return (int)(i + 1);
 }
 
 static void fill_stat_file(struct kernel_stat* st, size_t size) {
@@ -285,8 +274,6 @@ static void fill_stat_file(struct kernel_stat* st, size_t size) {
     st->st_size = (uint32_t)size;
     st->st_blksize = 512;
     st->st_blocks = (uint32_t)((size + 511) / 512);
-    st->st_uid = 0;
-    st->st_gid = 0;
 }
 
 static int sys_stat(const char* path, struct kernel_stat* st) {
@@ -302,7 +289,6 @@ static int sys_fstat(int fd, struct kernel_stat* st) {
     if (fd < 0 || fd >= FD_MAX || !fds[fd].used) return -EBADF;
     if (fds[fd].type == FD_CONSOLE) {
         fill_stat_file(st, 0);
-        st->st_mode = (uint16_t)(0020000 | S_IRUSR | S_IWUSR); /* char dev-ish */
         return 0;
     }
     if (fds[fd].type == FD_RAMFILE) {
@@ -327,7 +313,6 @@ void syscall_handler(struct registers* regs) {
         case SYS_EXIT_GROUP:
             process_exit_to_kernel((int)regs->ebx);
             break;
-
         case SYS_READ:
             ret = sys_read((int)regs->ebx, (char*)regs->ecx, (int)regs->edx);
             break;
@@ -352,11 +337,9 @@ void syscall_handler(struct registers* regs) {
         case SYS_DUP2:
             ret = sys_dup2((int)regs->ebx, (int)regs->ecx);
             break;
-
         case SYS_BRK:
             ret = (int)sys_brk(regs->ebx);
             break;
-
         case SYS_GETPID:
         case SYS_GETTID:
             ret = sched_current() ? sched_current()->id : 1;
@@ -366,13 +349,10 @@ void syscall_handler(struct registers* regs) {
             break;
         case SYS_GETUID:
         case SYS_GETEUID:
-            ret = 0; /* root */
-            break;
         case SYS_GETGID:
         case SYS_GETEGID:
             ret = 0;
             break;
-
         case SYS_CHDIR:
             ret = sys_chdir((const char*)regs->ebx);
             break;
@@ -392,7 +372,6 @@ void syscall_handler(struct registers* regs) {
         case SYS_GETCWD:
             ret = sys_getcwd((char*)regs->ebx, (size_t)regs->ecx);
             break;
-
         case SYS_STAT:
         case SYS_LSTAT:
             ret = sys_stat((const char*)regs->ebx, (struct kernel_stat*)regs->ecx);
@@ -400,45 +379,33 @@ void syscall_handler(struct registers* regs) {
         case SYS_FSTAT:
             ret = sys_fstat((int)regs->ebx, (struct kernel_stat*)regs->ecx);
             break;
-
         case SYS_TIME:
             ret = sys_time((uint32_t*)regs->ebx);
             break;
         case SYS_CLOCK_GETTIME:
-            /* clock_gettime(clk, timespec*) — заполняем секунды */
             if (regs->ecx) {
-                uint32_t* ts = (uint32_t*)regs->ecx; /* sec, nsec */
+                uint32_t* ts = (uint32_t*)regs->ecx;
                 ts[0] = g_boot_epoch + timer_ticks() / 100;
                 ts[1] = (timer_ticks() % 100) * 10000000u;
                 ret = 0;
             } else ret = -EFAULT;
             break;
-
         case SYS_YIELD:
             sched_yield();
             ret = 0;
             break;
         case SYS_NANOSLEEP:
-            /* не спим по-настоящему — yield */
             sched_yield();
             ret = 0;
             break;
-
         case SYS_IOCTL:
-            ret = 0; /* ignore TIOCGWINSZ etc. */
-            break;
         case SYS_FCNTL:
-            ret = 0;
-            break;
         case SYS_CHMOD:
-        case SYS_FCHMOD:
             ret = 0;
             break;
         case SYS_SETSID:
             ret = sched_current() ? sched_current()->id : 1;
             break;
-
-        /* --- пока не реализовано (нужны процессы/VM) --- */
         case SYS_FORK:
         case SYS_WAITPID:
         case SYS_EXECVE:
@@ -455,11 +422,9 @@ void syscall_handler(struct registers* regs) {
         case SYS_REBOOT:
             ret = -ENOSYS;
             break;
-
         default:
             ret = -ENOSYS;
             break;
     }
-
     regs->eax = (uint32_t)ret;
 }
