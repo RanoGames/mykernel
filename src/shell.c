@@ -1,4 +1,4 @@
-/* shell.c — RAM FS, ELF, FAT32, MyLang, scheduler, dyld, snake */
+/* shell.c — includes snake + beep */
 
 #include "shell.h"
 #include "vga.h"
@@ -12,6 +12,7 @@
 #include "sched.h"
 #include "timer.h"
 #include "snake.h"
+#include "sound.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -183,7 +184,7 @@ static void cmd_help(void) {
     terminal_writestring("FAT32:  fatmount fatinfo fatls fatcat fatwrite\n");
     terminal_writestring("Lang:   lang | lang <file>\n");
     terminal_writestring("Tasks:  ps  spawn\n");
-    terminal_writestring("Games:  snake\n");
+    terminal_writestring("Games:  snake  beep [freq|err|coin]\n");
     terminal_writestring("Programs: exec hello | exec dynhello\n");
 }
 
@@ -330,7 +331,7 @@ static void cmd_run(const char* arg) {
 
 static void cmd_exec(const char* arg) {
     if (arg[0] == '\0') {
-        terminal_writestring("Usage: exec hello | exec dynhello | exec <file>\n");
+        terminal_writestring("Usage: exec hello | exec dynhello\n");
         return;
     }
     const uint8_t* image = 0;
@@ -382,8 +383,19 @@ static void cmd_fatwrite(const char* args) {
     else terminal_writestring("OK\n");
 }
 
+static void cmd_beep(const char* arg) {
+    if (arg[0] == '\0') { sound_beep_ok(); return; }
+    if (str_equals(arg, "err")) { sound_beep_err(); return; }
+    if (str_equals(arg, "coin")) { sound_beep_coin(); return; }
+    uint32_t f = 0;
+    for (const char* p = arg; *p >= '0' && *p <= '9'; p++)
+        f = f * 10 + (uint32_t)(*p - '0');
+    if (f == 0) f = 440;
+    sound_beep(f, 120);
+}
+
 static void cmd_snake(void) {
-    terminal_writestring("Snake: arrows/WASD, Q=quit, Enter=restart\n");
+    terminal_writestring("Snake: arrows/WASD, Q=quit\n");
     snake_run();
 }
 
@@ -457,7 +469,7 @@ static void execute_command(const char* line) {
     else if (str_equals(line, "help")) cmd_help();
     else if (str_equals(line, "clear")) terminal_initialize();
     else if (str_equals(line, "about"))
-        terminal_writestring("MyKernel -- gfx + mouse + snake + dyld\n");
+        terminal_writestring("MyKernel -- gfx + mouse + snake + sound(PIT)\n");
     else if (str_equals(line, "reboot")) cmd_reboot();
     else if (str_equals(line, "shutdown")) cmd_shutdown();
     else if (str_equals(line, "uname")) cmd_uname();
@@ -497,6 +509,8 @@ static void execute_command(const char* line) {
     else if (str_equals(line, "ps")) cmd_ps();
     else if (str_equals(line, "spawn")) cmd_spawn();
     else if (str_equals(line, "snake")) cmd_snake();
+    else if (str_starts_with(line, "beep ")) cmd_beep(line + 5);
+    else if (str_equals(line, "beep")) cmd_beep("");
     else {
         terminal_writestring("Unknown: ");
         terminal_writestring(line);
@@ -507,7 +521,7 @@ static void execute_command(const char* line) {
 void shell_run(void) {
     char line[CMD_BUFFER_SIZE];
     char path[PWD_BUFFER_SIZE];
-    terminal_writestring("\nMyKernel. help | snake | exec hello\n");
+    terminal_writestring("\nMyKernel. help | snake | beep\n");
     for (;;) {
         fs_pwd(path, sizeof(path));
         terminal_writestring(path);
