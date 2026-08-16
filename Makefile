@@ -37,7 +37,7 @@ endif
 # ВАЖНО: boot.o должен быть первым объектным файлом при линковке,
 # чтобы Multiboot-заголовок и _start оказались в начале бинарника.
 ASM_SOURCES = boot.s gdt_flush.s idt_load.s isr.s
-C_SOURCES   = kernel.c gdt.c vga.c idt.c irq.c keyboard.c shell.c fs.c calc.c
+C_SOURCES   = kernel.c gdt.c serial.c vga.c idt.c irq.c keyboard.c shell.c fs.c calc.c
 
 ASM_OBJECTS = $(ASM_SOURCES:%.s=$(BUILD_DIR)/%.o)
 C_OBJECTS   = $(C_SOURCES:%.c=$(BUILD_DIR)/%.o)
@@ -76,6 +76,13 @@ iso: $(BUILD_DIR)/mykernel.bin
 # Быстрый запуск в QEMU напрямую из бинарника ядра (без GRUB/ISO)
 run: $(BUILD_DIR)/mykernel.bin
 	qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin
+
+# То же самое, но без графического окна вообще — весь вывод (VGA
+# дублируется в serial-порт, см. src/serial.c) идёт прямо в терминал.
+# Полезно, если у вас не получается увидеть графическое окно QEMU
+# (проблемы с рендерингом WSLg/драйверами видеокарты и т.п.)
+run-nographic: $(BUILD_DIR)/mykernel.bin
+	qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin -nographic
 
 # Запуск собранного ISO-образа (полная эмуляция настоящей загрузки через GRUB)
 run-iso: iso

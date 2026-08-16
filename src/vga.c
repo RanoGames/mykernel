@@ -4,6 +4,7 @@
 
 #include "vga.h"
 #include "io.h"
+#include "serial.h"
 
 #define VGA_ADDRESS 0xB8000
 #define VGA_WIDTH   80
@@ -89,6 +90,14 @@ static void terminal_scroll(void) {
 }
 
 void terminal_putchar(char c) {
+    /* Дублируем вывод в последовательный порт (COM1). Это НЕ мешает
+     * обычному VGA-выводу — просто параллельная копия того же текста.
+     * Благодаря этому один и тот же код (shell, kernel.c и т.д.)
+     * одинаково виден что в графическом окне QEMU, что в обычном
+     * терминале при запуске "qemu-system-i386 -kernel ... -nographic",
+     * если у вас не получается увидеть графическое окно. */
+    serial_putchar(c);
+
     if (c == '\n') {
         terminal_column = 0;
         terminal_row++;

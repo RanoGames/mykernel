@@ -10,6 +10,7 @@
 #include "keyboard.h"
 #include "isr.h"
 #include "io.h"
+#include "serial.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -100,16 +101,40 @@ void keyboard_init(void) {
 }
 
 char keyboard_getchar(void) {
-    /* Ждём, пока обработчик прерывания что-нибудь не положит в буфер.
-     * hlt останавливает процессор до следующего прерывания — это
-     * гораздо экономнее (по энергии/нагрузке CPU в эмуляторе), чем
-     * пустой цикл while(1){}. Прерывания должны быть разрешены (sti
-     * вызывается один раз в kernel_main перед стартом shell). */
-    while (kbd_head == kbd_tail) {
+    for (;;) {
+        /* Источник 1: PS/2-клавиатура (обычное графическое окно QEMU).
+         * Символы туда кладёт обработчик прерывания keyboard_irq_handler. */
+        if (kbd_head != kbd_tail) {
+            char c = kbd_buffer[kbd_tail];
+            kbd_tail = (kbd_tail + 1) % KBD_BUFFER_SIZE;
+            return c;
+        }
+
+        /* Источник 2: последовательный порт (режим "-nographic" — когда
+         * графическое окно QEMU не используется вообще, а вы печатаете
+         * прямо в терминал WSL). Мы не завели под serial отдельное
+         * прерывание, поэтому проверяем его опросом (polling) —
+         * достаточно, т.к. человек печатает всё равно не быстрее, чем
+         * успевает выполниться этот цикл. */
+        if (serial_has_data()) {
+            char c = serial_read_char();
+
+            /* Терминалы обычно шлют по Enter байт '\r' (0x0D), а не
+             * '\n' — приводим к единому формату, который понимает shell */
+            if (c == '\r')
+                c = KEY_ENTER;
+            /* Некоторые терминалы шлют Backspace как DEL (0x7F) вместо
+             * привычного ASCII Backspace (0x08) — тоже нормализуем */
+            else if (c == 0x7F)
+                c = KEY_BACKSPACE;
+
+            return c;
+        }
+
+        /* Ничего не пришло ни оттуда, ни оттуда — ждём следующего
+         * прерывания (hlt экономнее пустого цикла while). Проснёмся
+         * либо от клавиатуры, либо просто от таймера — и в следующей
+         * итерации for(;;) снова проверим оба источника. */
         __asm__ volatile ("hlt");
     }
-
-    char c = kbd_buffer[kbd_tail];
-    kbd_tail = (kbd_tail + 1) % KBD_BUFFER_SIZE;
-    return c;
 }
