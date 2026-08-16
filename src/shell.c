@@ -106,6 +106,7 @@ static void cmd_help(void) {
     terminal_writestring("  echo <text>       - print text\n");
     terminal_writestring("  about             - info about the kernel\n");
     terminal_writestring("  reboot            - reboot the machine\n");
+    terminal_writestring("  shutdown          - power off the machine\n");
     terminal_writestring("  calc <expr>       - calculator, e.g.: calc 2 + 3 * (4 - 1)\n");
     terminal_writestring("Files and directories (stored in RAM, lost on reboot):\n");
     terminal_writestring("  ls                - list files/dirs in current directory\n");
@@ -131,6 +132,25 @@ static void cmd_reboot(void) {
     }
     __asm__ volatile ("outb %0, $0x64" : : "a"((uint8_t)0xFE));
     for (;;) __asm__ volatile ("hlt"); /* если вдруг не сработало */
+}
+
+/* Команда shutdown — пытается выключить машину.
+ * Работает в QEMU, Bochs и VirtualBox.
+ * На реальном железе без поддержки ACPI просто останавливает процессор. */
+static void cmd_shutdown(void) {
+    terminal_writestring("Shutting down...\n");
+
+    /* QEMU */
+    __asm__ volatile ("outw %0, %1" : : "a"((uint16_t)0x2000), "Nd"((uint16_t)0x604));
+    /* Bochs / старые версии QEMU */
+    __asm__ volatile ("outw %0, %1" : : "a"((uint16_t)0x2000), "Nd"((uint16_t)0xB004));
+    /* VirtualBox */
+    __asm__ volatile ("outw %0, %1" : : "a"((uint16_t)0x3400), "Nd"((uint16_t)0x4004));
+
+    /* Если ничего не сработало — останавливаем процессор */
+    for (;;) {
+        __asm__ volatile ("cli; hlt");
+    }
 }
 
 /* Команда calc — парсит и вычисляет выражение через модуль calc.c */
@@ -248,6 +268,8 @@ static void execute_command(const char* line) {
         terminal_writestring("MyKernel -- a learning kernel in C, boots via GRUB (Multiboot)\n");
     } else if (str_equals(line, "reboot")) {
         cmd_reboot();
+    } else if (str_equals(line, "shutdown")) {
+        cmd_shutdown();
     } else if (str_starts_with(line, "echo ")) {
         terminal_writestring(line + 5);
         terminal_putchar('\n');
