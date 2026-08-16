@@ -1,7 +1,7 @@
-/* dyld.h — упрощённый динамический загрузчик ELF (in-kernel)
+/* dyld.h - simplified in-kernel ELF dynamic loader
  *
- * Понимает PT_INTERP, PT_DYNAMIC, DT_NEEDED, базовые R_386_* релокации.
- * Это НЕ полный ld-linux + glibc — учебный минимум.
+ * Understands PT_INTERP, PT_DYNAMIC, DT_NEEDED, basic R_386_* relocations.
+ * Not a full ld-linux + glibc - educational minimum.
  */
 
 #ifndef DYLD_H
@@ -20,12 +20,12 @@ enum dyld_result {
     DYLD_ERR_NOMEM,
 };
 
-/* Загрузить ELF (static или dynamic), вернуть entry point */
+/* Load ELF (static or dynamic), return entry point */
 enum dyld_result dyld_load(const uint8_t* image, size_t size, uint32_t* entry_out);
 
 const char* dyld_strerror(enum dyld_result r);
 
-/* Установить в RAM FS /lib/* из встроенных blob'ов */
+/* Install lib blobs into RAM FS */
 void dyld_install_lib_tree(void);
 
 #endif
