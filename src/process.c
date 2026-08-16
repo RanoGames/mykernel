@@ -1,19 +1,26 @@
-/* process.c — exec ELF */
+/* process.c — exec ELF через dyld */
 
 #include "process.h"
 #include "elf.h"
+#include "dyld.h"
 #include "syscall.h"
 #include "vga.h"
 #include <stdint.h>
 
 int process_exec(const uint8_t* image, size_t size) {
     uint32_t entry = 0;
-    enum elf_result er = elf_load(image, size, &entry);
-    if (er != ELF_OK) {
-        terminal_writestring("ELF: ");
-        terminal_writestring(elf_strerror(er));
-        terminal_putchar('\n');
-        return -1;
+    enum dyld_result dr = dyld_load(image, size, &entry);
+    if (dr != DYLD_OK) {
+        /* fallback на статический loader */
+        enum elf_result er = elf_load(image, size, &entry);
+        if (er != ELF_OK) {
+            terminal_writestring("dyld: ");
+            terminal_writestring(dyld_strerror(dr));
+            terminal_writestring(" / elf: ");
+            terminal_writestring(elf_strerror(er));
+            terminal_putchar('\n');
+            return -1;
+        }
     }
 
     user_heap_reset();
