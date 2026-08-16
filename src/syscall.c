@@ -1,11 +1,16 @@
-/* syscall.c — обработка int 0x80 */
+/* syscall.c — int 0x80: exit, read, write, brk */
 
 #include "syscall.h"
 #include "vga.h"
 #include <stdint.h>
 #include <stddef.h>
 
-/* Контекст возврата из userspace-программы в exec() */
+/* Userspace heap window (отдельно от ELF @ 0x400000 и kernel heap @ 0x200000) */
+#define USER_HEAP_BASE 0x500000u
+#define USER_HEAP_MAX  0x600000u
+
+static uint32_t user_brk = USER_HEAP_BASE;
+
 static uint32_t g_kernel_esp;
 static void* g_kernel_cont;
 static int g_exit_code;
@@ -19,10 +24,6 @@ void process_save_kernel_context(uint32_t esp, void* cont) {
 
 int process_last_exit_code(void) {
     return g_exit_code;
-}
-
-int process_is_running(void) {
-    return g_in_process;
 }
 
 void process_exit_to_kernel(int code) {
@@ -40,11 +41,13 @@ void process_exit_to_kernel(int code) {
     for (;;) __asm__ volatile ("hlt");
 }
 
+void user_heap_reset(void) {
+    user_brk = USER_HEAP_BASE;
+}
+
 static int sys_write(int fd, const char* buf, int count) {
-    (void)fd; /* 1 = stdout; пока всё пишем на экран */
-    if (count < 0)
-        return -1;
-    if (!buf)
+    (void)fd;
+    if (count < 0 || !buf)
         return -1;
     for (int i = 0; i < count; i++)
         terminal_putchar(buf[i]);
@@ -55,8 +58,19 @@ static int sys_read(int fd, char* buf, int count) {
     (void)fd;
     (void)buf;
     (void)count;
-    /* Пока не блокируем ввод из userspace — заглушка */
     return 0;
+}
+
+/* Linux-style brk: arg = desired new break; return actual break */
+static uint32_t sys_brk(uint32_t new_brk) {
+    if (new_brk == 0)
+        return user_brk;
+    if (new_brk < USER_HEAP_BASE)
+        return user_brk;
+    if (new_brk > USER_HEAP_MAX)
+        return user_brk;
+    user_brk = new_brk;
+    return user_brk;
 }
 
 void syscall_handler(struct registers* regs) {
@@ -66,13 +80,15 @@ void syscall_handler(struct registers* regs) {
     switch (num) {
         case SYS_EXIT:
             process_exit_to_kernel((int)regs->ebx);
-            /* не возвращаемся */
             break;
         case SYS_WRITE:
             ret = sys_write((int)regs->ebx, (const char*)regs->ecx, (int)regs->edx);
             break;
         case SYS_READ:
             ret = sys_read((int)regs->ebx, (char*)regs->ecx, (int)regs->edx);
+            break;
+        case SYS_BRK:
+            ret = (int)sys_brk(regs->ebx);
             break;
         default:
             ret = -1;
