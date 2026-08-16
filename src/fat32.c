@@ -1,4 +1,4 @@
-/* fat32.c — FAT32 read + write (root, 8.3) */
+/* fat32.c — FAT32 read + write (root, 8.3) + fat32_read_file */
 
 #include "fat32.h"
 #include "ata.h"
@@ -151,7 +151,6 @@ static int fat_set(uint32_t cluster, uint32_t value) {
     uint32_t fat_sector = fat_start + (fat_offset / SECTOR_SIZE);
     uint32_t ent_offset = fat_offset % SECTOR_SIZE;
 
-    /* пишем во все копии FAT */
     for (uint8_t f = 0; f < num_fats; f++) {
         uint32_t sec = fat_sector + (uint32_t)f * fat_size_sectors;
         if (ata_read_sectors(partition_lba + sec, 1, sector_buf) != 0)
@@ -172,10 +171,9 @@ static int fat_set(uint32_t cluster, uint32_t value) {
 }
 
 static uint32_t fat_alloc_cluster(void) {
-    /* кластеры 2 .. total_clusters+1 */
     for (uint32_t c = 2; c < total_clusters + 2; c++) {
         if (fat_get(c) == 0) {
-            if (fat_set(c, 0x0FFFFFFF) != 0) /* EOC */
+            if (fat_set(c, 0x0FFFFFFF) != 0)
                 return 0;
             return c;
         }
@@ -287,7 +285,6 @@ struct slot_ctx {
     struct fat_dirent existing;
 };
 
-/* Ищем свободный слот или существующий файл с тем же именем в корне */
 static int find_slot_in_root(struct slot_ctx* sc) {
     uint32_t cluster = root_cluster;
     sc->found = 0;
@@ -319,14 +316,12 @@ static int find_slot_in_root(struct slot_ctx* sc) {
                 sc->cluster = cluster;
                 sc->offset = off;
                 sc->found = 1;
-                /* не return — ищем ещё existing с тем же именем дальше */
                 if (first == 0x00)
-                    return 0; /* дальше пусто */
+                    return 0;
             }
         }
         uint32_t next = fat_get(cluster);
         if (next >= 0x0FFFFFF8) {
-            /* конец цепочки — если слота нет, расширим каталог */
             if (!sc->found) {
                 uint32_t nc = fat_alloc_cluster();
                 if (!nc) return -2;
@@ -460,7 +455,6 @@ enum fat_result fat32_write(const char* name, const char* text) {
     if (sr == -2) return FAT_ERR_NO_SPACE;
     if (sr < 0) return FAT_ERR_IO;
 
-    /* освободить старую цепочку, если перезаписываем */
     if (sc.found_existing) {
         if (sc.existing.attr & ATTR_DIRECTORY)
             return FAT_ERR_IS_DIR;
@@ -498,7 +492,6 @@ enum fat_result fat32_write(const char* name, const char* text) {
             return FAT_ERR_IO;
     }
 
-    /* обновить/создать dirent */
     if (read_cluster(sc.cluster) != 0) return FAT_ERR_IO;
     struct fat_dirent* de = (struct fat_dirent*)(cluster_buf + sc.offset);
     mem_set(de, 0, sizeof(*de));
@@ -509,6 +502,36 @@ enum fat_result fat32_write(const char* name, const char* text) {
     de->file_size = (uint32_t)len;
     if (write_cluster(sc.cluster) != 0) return FAT_ERR_IO;
 
+    return FAT_OK;
+}
+
+enum fat_result fat32_read_file(const char* name, char* buf, size_t buf_size, size_t* out_len) {
+    if (out_len) *out_len = 0;
+    if (!mounted) return FAT_ERR_NOT_MOUNTED;
+    if (!name || !name[0] || !buf || buf_size == 0) return FAT_ERR_NOT_FOUND;
+
+    struct find_ctx fc;
+    fc.name = name;
+    fc.ok = 0;
+    if (iterate_dir(root_cluster, find_cb, &fc) < 0) return FAT_ERR_IO;
+    if (!fc.ok) return FAT_ERR_NOT_FOUND;
+    if (fc.found.attr & ATTR_DIRECTORY) return FAT_ERR_IS_DIR;
+
+    uint32_t cluster = ((uint32_t)fc.found.first_cluster_hi << 16) | fc.found.first_cluster_lo;
+    uint32_t remaining = fc.found.file_size;
+    size_t written = 0;
+
+    while (cluster >= 2 && cluster < 0x0FFFFFF8 && remaining > 0 && written < buf_size) {
+        if (read_cluster(cluster) != 0) return FAT_ERR_IO;
+        size_t chunk = (size_t)sectors_per_cluster * SECTOR_SIZE;
+        if (chunk > remaining) chunk = remaining;
+        if (chunk > buf_size - written) chunk = buf_size - written;
+        for (size_t i = 0; i < chunk; i++)
+            buf[written++] = (char)cluster_buf[i];
+        remaining -= (uint32_t)chunk;
+        cluster = fat_get(cluster);
+    }
+    if (out_len) *out_len = written;
     return FAT_OK;
 }
 
