@@ -35,6 +35,9 @@ struct mk_surface* mk_surface_get(int id);
 void mk_compose(void);                   /* full redraw: wallpaper, panel, windows, cursor */
 void mk_set_wallpaper_color(uint32_t c);
 void mk_draw_cursor(void);
+/* Move cursor without full compose (saves/restores underlay). */
+void mk_cursor_move(int x, int y);
+void mk_cursor_invalidate(void);
 
 /* Hit-test: topmost surface under (sx,sy), including title bar. Returns id or -1. */
 int  mk_hit_test(int sx, int sy, int* local_x, int* local_y, int* on_title, int* on_close);

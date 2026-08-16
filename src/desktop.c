@@ -7,6 +7,7 @@
 #include "mouse.h"
 #include "keyboard.h"
 #include "vga.h"
+#include "gfx.h"
 #include "timer.h"
 #include "settings.h"
 
@@ -97,15 +98,15 @@ void desktop_run(void) {
             need_redraw = 1;
         }
 
-        /* redraw on motion for cursor, throttled ~ every 1 tick */
+        /* Mouse motion: only move cursor (no full-screen redraw). */
         static int last_mx = -1, last_my = -1;
         if (m.x != last_mx || m.y != last_my) {
-            need_redraw = 1;
+            mk_cursor_move(m.x, m.y);
             last_mx = m.x;
             last_my = m.y;
         }
 
-        if (need_redraw && (timer_ticks() != last_draw || left_down || left_up)) {
+        if (need_redraw) {
             mk_compose();
             need_redraw = 0;
             last_draw = timer_ticks();
@@ -117,6 +118,7 @@ void desktop_run(void) {
 
 done:
     mk_shutdown();
-    terminal_initialize();
+    /* VBE DISPI off is not enough — must reprogram VGA to 80x25 text */
+    gfx_restore_text();
     terminal_writestring("desktop: exited\n");
 }

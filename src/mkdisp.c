@@ -10,6 +10,11 @@ static int g_active;
 static uint32_t g_wallpaper = 0x002B579A; /* Win7-ish blue */
 static int g_sw, g_sh;
 
+/* Cursor underlay to avoid full-screen redraw on mouse move */
+static uint32_t cursor_under[MK_CURSOR_W * MK_CURSOR_H];
+static int cursor_ux = -1, cursor_uy = -1;
+static int cursor_under_valid = 0;
+
 /* Simple arrow cursor mask (1=fg, 2=outline, 0=empty) */
 static const uint8_t cursor_mask[MK_CURSOR_H][MK_CURSOR_W] = {
     {1,0,0,0,0,0,0,0,0,0,0,0},
@@ -177,21 +182,73 @@ static void draw_panel(void) {
     mk_fb_text(g_sw - 200, y + 6, "ESC = exit desktop", 0x00AAAAAA, 0x001F1F1F);
 }
 
-void mk_draw_cursor(void) {
-    struct mouse_state m;
-    mouse_get(&m);
+static void cursor_restore_under(void) {
+    if (!cursor_under_valid || !g_active) return;
+    for (int row = 0; row < MK_CURSOR_H; row++) {
+        for (int col = 0; col < MK_CURSOR_W; col++) {
+            vbe_putpixel(cursor_ux + col, cursor_uy + row,
+                         cursor_under[row * MK_CURSOR_W + col]);
+        }
+    }
+    cursor_under_valid = 0;
+}
+
+static void cursor_save_under(int x, int y) {
+    if (!g_active) return;
+    for (int row = 0; row < MK_CURSOR_H; row++) {
+        for (int col = 0; col < MK_CURSOR_W; col++) {
+            /* read pixel from LFB */
+            const struct vbe_info* vi = vbe_get_info();
+            uint32_t pix = 0;
+            if (vi && vi->active && vi->lfb) {
+                int px = x + col, py = y + row;
+                if ((unsigned)px < vi->width && (unsigned)py < vi->height) {
+                    volatile uint32_t* fb = (volatile uint32_t*)(uint32_t)vi->lfb;
+                    pix = fb[py * vi->width + px];
+                }
+            }
+            cursor_under[row * MK_CURSOR_W + col] = pix;
+        }
+    }
+    cursor_ux = x;
+    cursor_uy = y;
+    cursor_under_valid = 1;
+}
+
+static void cursor_paint_at(int x, int y) {
     for (int row = 0; row < MK_CURSOR_H; row++) {
         for (int col = 0; col < MK_CURSOR_W; col++) {
             uint8_t v = cursor_mask[row][col];
             if (!v) continue;
             uint32_t c = (v == 1) ? 0x00FFFFFF : 0x00000000;
-            vbe_putpixel(m.x + col, m.y + row, c);
+            vbe_putpixel(x + col, y + row, c);
         }
     }
 }
 
+void mk_draw_cursor(void) {
+    struct mouse_state m;
+    mouse_get(&m);
+    cursor_save_under(m.x, m.y);
+    cursor_paint_at(m.x, m.y);
+}
+
+void mk_cursor_invalidate(void) {
+    cursor_under_valid = 0;
+}
+
+void mk_cursor_move(int x, int y) {
+    if (!g_active) return;
+    if (cursor_under_valid && cursor_ux == x && cursor_uy == y)
+        return;
+    cursor_restore_under();
+    cursor_save_under(x, y);
+    cursor_paint_at(x, y);
+}
+
 void mk_compose(void) {
     if (!g_active) return;
+    cursor_under_valid = 0; /* frame will be fully redrawn */
     vbe_clear(g_wallpaper);
 
     /* soft gradient strip at top */
