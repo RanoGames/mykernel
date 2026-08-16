@@ -24,6 +24,7 @@ USER_DIR  = user
 
 CFLAGS = -std=gnu99 -ffreestanding -fno-stack-protector -fno-pic -fno-pie -Wall -Wextra -O2 $(EXTRA_ARCH_FLAGS) -I$(SRC_DIR)
 USER_CFLAGS = -std=gnu99 -ffreestanding -fno-stack-protector -fno-pic -fno-pie -Wall -Wextra -O2 $(EXTRA_ARCH_FLAGS) -I$(USER_DIR)/include
+USER_PIC_CFLAGS = -std=gnu99 -ffreestanding -fno-stack-protector -fPIC -Wall -Wextra -O2 $(EXTRA_ARCH_FLAGS) -I$(USER_DIR)/include
 
 ifeq ($(CROSS_CC),)
     LINK_EXTRA_FLAGS = -no-pie -static
@@ -32,16 +33,20 @@ else
 endif
 
 ASM_SOURCES = boot.s gdt_flush.s idt_load.s isr.s context_switch.s
-C_SOURCES   = kernel.c gdt.c serial.c vga.c idt.c irq.c keyboard.c shell.c fs.c calc.c syscall.c elf.c process.c ata.c fat32.c kmalloc.c mlang.c timer.c sched.c
+C_SOURCES   = kernel.c gdt.c serial.c vga.c idt.c irq.c keyboard.c shell.c fs.c calc.c syscall.c elf.c process.c ata.c fat32.c kmalloc.c mlang.c timer.c sched.c dyld.c
 
 ASM_OBJECTS = $(ASM_SOURCES:%.s=$(BUILD_DIR)/%.o)
 C_OBJECTS   = $(C_SOURCES:%.c=$(BUILD_DIR)/%.o)
 
 USER_ELF    = $(BUILD_DIR)/hello.elf
 USER_BLOB   = $(BUILD_DIR)/hello_blob.o
+LIBHELLO_SO = $(BUILD_DIR)/libhello.so
+LIBHELLO_BLOB = $(BUILD_DIR)/libhello_blob.o
+DYNHELLO_ELF = $(BUILD_DIR)/dynhello.elf
+DYNHELLO_BLOB = $(BUILD_DIR)/dynhello_blob.o
 USER_LIB_OBJS = $(BUILD_DIR)/user_stdio.o $(BUILD_DIR)/user_string.o $(BUILD_DIR)/user_malloc.o
 
-OBJECTS = $(BUILD_DIR)/boot.o $(filter-out $(BUILD_DIR)/boot.o,$(ASM_OBJECTS)) $(C_OBJECTS) $(USER_BLOB)
+OBJECTS = $(BUILD_DIR)/boot.o $(filter-out $(BUILD_DIR)/boot.o,$(ASM_OBJECTS)) $(C_OBJECTS) $(USER_BLOB) $(LIBHELLO_BLOB) $(DYNHELLO_BLOB)
 
 MKFS_FAT := $(shell command -v mkfs.vfat 2>/dev/null || command -v mkfs.fat 2>/dev/null)
 
@@ -67,12 +72,30 @@ $(BUILD_DIR)/user_string.o: $(USER_DIR)/lib/string.c $(wildcard $(USER_DIR)/incl
 $(BUILD_DIR)/user_malloc.o: $(USER_DIR)/lib/malloc.c $(wildcard $(USER_DIR)/include/*.h) | $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
-user: $(USER_ELF)
+user: $(USER_ELF) $(LIBHELLO_SO) $(DYNHELLO_ELF)
 
 $(USER_ELF): $(USER_DIR)/hello.c $(USER_DIR)/linker.ld $(USER_LIB_OBJS) | $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -T $(USER_DIR)/linker.ld -nostdlib -Wl,--build-id=none -o $@ $(USER_DIR)/hello.c $(USER_LIB_OBJS)
 
 $(USER_BLOB): $(USER_ELF)
+	$(OBJCOPY) -O elf32-i386 -B i386 -I binary $< $@
+
+/* shared library */
+$(LIBHELLO_SO): $(USER_DIR)/libhello.c $(USER_DIR)/libhello.ld | $(BUILD_DIR)
+	$(CC) $(USER_PIC_CFLAGS) -shared -nostdlib -Wl,--build-id=none \
+		-T $(USER_DIR)/libhello.ld -o $@ $(USER_DIR)/libhello.c
+
+$(LIBHELLO_BLOB): $(LIBHELLO_SO)
+	$(OBJCOPY) -O elf32-i386 -B i386 -I binary $< $@
+
+/* dynamically linked program */
+$(DYNHELLO_ELF): $(USER_DIR)/dynhello.c $(USER_DIR)/dynhello.ld $(LIBHELLO_SO) | $(BUILD_DIR)
+	$(CC) $(USER_PIC_CFLAGS) -nostdlib -Wl,--build-id=none \
+		-T $(USER_DIR)/dynhello.ld \
+		-Wl,-dynamic-linker,/lib/ld-mykernel.so \
+		-o $@ $(USER_DIR)/dynhello.c $(LIBHELLO_SO)
+
+$(DYNHELLO_BLOB): $(DYNHELLO_ELF)
 	$(OBJCOPY) -O elf32-i386 -B i386 -I binary $< $@
 
 $(BUILD_DIR)/mykernel.bin: $(OBJECTS) $(SRC_DIR)/linker.ld
