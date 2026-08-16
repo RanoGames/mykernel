@@ -63,7 +63,6 @@ void fs_init(void) {
     nodes[FS_ROOT_INDEX].parent = -1;
     cwd = FS_ROOT_INDEX;
 
-    /* дерево как у Linux: /lib */
     fs_mkdir("lib");
     fs_mkdir("bin");
     fs_mkdir("usr");
@@ -198,7 +197,6 @@ enum fs_result fs_read(const char* name, const char** out_content, size_t* out_l
     return FS_OK;
 }
 
-/* абсолютный или относительный путь: /lib/foo.so */
 enum fs_result fs_read_path(const char* path, const char** out_content, size_t* out_len) {
     if (!path || !path[0]) return FS_ERR_NOT_FOUND;
 
@@ -233,7 +231,6 @@ enum fs_result fs_read_path(const char* path, const char** out_content, size_t* 
         if (idx == -1) { cwd = saved; return FS_ERR_NOT_FOUND; }
 
         if (*p == '\0') {
-            /* последний компонент — файл */
             if (nodes[idx].type != FS_TYPE_FILE) { cwd = saved; return FS_ERR_IS_A_DIRECTORY; }
             *out_content = nodes[idx].content;
             *out_len = nodes[idx].content_len;
@@ -318,6 +315,21 @@ int fs_node_count(void) {
     for (int i = 0; i < FS_MAX_NODES; i++)
         if (nodes[i].type != FS_TYPE_FREE) n++;
     return n;
+}
+
+int fs_cwd_entry(int index, char* name_out, size_t name_sz, int* is_dir) {
+    int n = 0;
+    for (int i = 0; i < FS_MAX_NODES; i++) {
+        if (nodes[i].type == FS_TYPE_FREE) continue;
+        if (nodes[i].parent != cwd) continue;
+        if (n == index) {
+            k_strcpy_truncate(name_out, nodes[i].name, name_sz);
+            if (is_dir) *is_dir = (nodes[i].type == FS_TYPE_DIR) ? 1 : 0;
+            return 0;
+        }
+        n++;
+    }
+    return -1;
 }
 
 void fs_ls(void) {
