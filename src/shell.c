@@ -1,4 +1,4 @@
-/* shell.c — RAM FS, ELF, FAT32, MyLang, scheduler, dyld */
+/* shell.c — RAM FS, ELF, FAT32, MyLang, scheduler, dyld, snake */
 
 #include "shell.h"
 #include "vga.h"
@@ -11,6 +11,7 @@
 #include "mlang.h"
 #include "sched.h"
 #include "timer.h"
+#include "snake.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -182,6 +183,7 @@ static void cmd_help(void) {
     terminal_writestring("FAT32:  fatmount fatinfo fatls fatcat fatwrite\n");
     terminal_writestring("Lang:   lang | lang <file>\n");
     terminal_writestring("Tasks:  ps  spawn\n");
+    terminal_writestring("Games:  snake\n");
     terminal_writestring("Programs: exec hello | exec dynhello\n");
 }
 
@@ -380,6 +382,11 @@ static void cmd_fatwrite(const char* args) {
     else terminal_writestring("OK\n");
 }
 
+static void cmd_snake(void) {
+    terminal_writestring("Snake: arrows/WASD, Q=quit, Enter=restart\n");
+    snake_run();
+}
+
 static void cmd_ps(void) {
     terminal_writestring("ticks=");
     terminal_write_uint(timer_ticks());
@@ -450,7 +457,7 @@ static void execute_command(const char* line) {
     else if (str_equals(line, "help")) cmd_help();
     else if (str_equals(line, "clear")) terminal_initialize();
     else if (str_equals(line, "about"))
-        terminal_writestring("MyKernel -- dyld + scheduler + ELF + FAT32\n");
+        terminal_writestring("MyKernel -- gfx + mouse + snake + dyld\n");
     else if (str_equals(line, "reboot")) cmd_reboot();
     else if (str_equals(line, "shutdown")) cmd_shutdown();
     else if (str_equals(line, "uname")) cmd_uname();
@@ -489,6 +496,7 @@ static void execute_command(const char* line) {
     else if (str_equals(line, "lang")) cmd_lang("");
     else if (str_equals(line, "ps")) cmd_ps();
     else if (str_equals(line, "spawn")) cmd_spawn();
+    else if (str_equals(line, "snake")) cmd_snake();
     else {
         terminal_writestring("Unknown: ");
         terminal_writestring(line);
@@ -499,7 +507,7 @@ static void execute_command(const char* line) {
 void shell_run(void) {
     char line[CMD_BUFFER_SIZE];
     char path[PWD_BUFFER_SIZE];
-    terminal_writestring("\nMyKernel. help | exec dynhello | ls /lib\n");
+    terminal_writestring("\nMyKernel. help | snake | exec hello\n");
     for (;;) {
         fs_pwd(path, sizeof(path));
         terminal_writestring(path);
