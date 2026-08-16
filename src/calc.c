@@ -1,19 +1,16 @@
 /* calc.c — простой калькулятор арифметических выражений.
  *
  * Используется классическая техника "рекурсивного спуска" (recursive
- * descent parser) — три функции, вызывающие друг друга по уровням
- * приоритета операций:
+ * descent parser) — функции вызывают друг друга по уровням приоритета:
  *
  *   parse_expr   — обрабатывает + и -           (самый низкий приоритет)
- *   parse_term    — обрабатывает * и /            (выше приоритет)
+ *   parse_term    — обрабатывает * и /            (средний приоритет)
+ *   parse_power   — обрабатывает ^ (степень)      (высокий приоритет, правоассоциативно)
  *   parse_factor   — числа, скобки, унарный минус   (самый высокий приоритет)
  *
- * Именно из-за такого порядка вызовов (expr зовёт term, term зовёт
- * factor) в выражении "2 + 3 * 4" сначала посчитается "3 * 4", а
- * потом прибавится "2" — то есть приоритет операций соблюдается
- * автоматически, без специальных проверок. Скобки обрабатываются
- * в parse_factor рекурсивным вызовом parse_expr — отсюда и название
- * техники. */
+ * Именно из-за такого порядка вызовов в выражении "2 + 3 * 4^2"
+ * сначала посчитается 4^2, потом умножение, потом сложение.
+ * Степень правоассоциативна: 2^3^2 = 2^(3^2) = 512. */
 
 #include "calc.h"
 
@@ -27,36 +24,54 @@ static void skip_spaces(struct calc_parser* pr) {
         pr->p++;
 }
 
-static long parse_expr(struct calc_parser* pr); /* объявление вперёд — используется в parse_factor для скобок */
+/* Целочисленное возведение в степень (только неотрицательный показатель).
+ * Отрицательная степень — ошибка (у нас нет дробных чисел). */
+static long ipow(long base, long exp, int* error) {
+    if (exp < 0) {
+        *error = 1;
+        return 0;
+    }
 
-/* factor: число, (выражение в скобках), или унарный минус перед любым из этого */
+    long result = 1;
+    while (exp > 0) {
+        if (exp & 1)
+            result *= base;
+        base *= base;
+        exp >>= 1;
+    }
+    return result;
+}
+
+static long parse_expr(struct calc_parser* pr); /* объявление вперёд */
+
+/* factor: число, (выражение в скобках), или унарный минус/плюс */
 static long parse_factor(struct calc_parser* pr) {
     skip_spaces(pr);
 
     if (*pr->p == '-') {
         pr->p++;
-        return -parse_factor(pr); /* унарный минус — рекурсивно применяем к следующему фактору */
+        return -parse_factor(pr);
     }
 
     if (*pr->p == '+') {
         pr->p++;
-        return parse_factor(pr); /* унарный плюс — просто пропускаем, ни на что не влияет */
+        return parse_factor(pr);
     }
 
     if (*pr->p == '(') {
-        pr->p++; /* съели открывающую скобку */
+        pr->p++;
         long value = parse_expr(pr);
         skip_spaces(pr);
         if (*pr->p != ')') {
-            pr->error = 1; /* не нашли закрывающую скобку — ошибка в выражении */
+            pr->error = 1;
             return 0;
         }
-        pr->p++; /* съели закрывающую скобку */
+        pr->p++;
         return value;
     }
 
     if (*pr->p < '0' || *pr->p > '9') {
-        pr->error = 1; /* ожидали цифру или скобку, а нашли что-то другое */
+        pr->error = 1;
         return 0;
     }
 
@@ -68,21 +83,34 @@ static long parse_factor(struct calc_parser* pr) {
     return value;
 }
 
-/* term: разбирает цепочки умножения/деления, например "3 * 4 / 2" */
+/* power: возведение в степень, правоассоциативно (2^3^2 = 2^(3^2)) */
+static long parse_power(struct calc_parser* pr) {
+    long base = parse_factor(pr);
+
+    skip_spaces(pr);
+    if (*pr->p == '^') {
+        pr->p++;
+        long exp = parse_power(pr);          /* рекурсия → правоассоциативность */
+        base = ipow(base, exp, &pr->error);
+    }
+    return base;
+}
+
+/* term: цепочки умножения/деления */
 static long parse_term(struct calc_parser* pr) {
-    long value = parse_factor(pr);
+    long value = parse_power(pr);
 
     for (;;) {
         skip_spaces(pr);
         if (*pr->p == '*') {
             pr->p++;
-            long rhs = parse_factor(pr);
+            long rhs = parse_power(pr);
             value *= rhs;
         } else if (*pr->p == '/') {
             pr->p++;
-            long rhs = parse_factor(pr);
+            long rhs = parse_power(pr);
             if (rhs == 0) {
-                pr->error = 1; /* деление на 0 — считаем ошибкой вычисления */
+                pr->error = 1;
                 return 0;
             }
             value /= rhs;
@@ -93,7 +121,7 @@ static long parse_term(struct calc_parser* pr) {
     return value;
 }
 
-/* expr: разбирает цепочки сложения/вычитания, например "1 + 2 - 3" */
+/* expr: цепочки сложения/вычитания */
 static long parse_expr(struct calc_parser* pr) {
     long value = parse_term(pr);
 
@@ -119,7 +147,7 @@ long calc_eval(const char* expr, int* out_error) {
 
     skip_spaces(&pr);
     if (*pr.p != '\0')
-        pr.error = 1; /* после разбора выражения остался "хвост" — значит, в нём была ошибка */
+        pr.error = 1;
 
     *out_error = pr.error;
     return result;
