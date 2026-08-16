@@ -107,7 +107,7 @@ static void cmd_help(void) {
     terminal_writestring("  about             - info about the kernel\n");
     terminal_writestring("  reboot            - reboot the machine\n");
     terminal_writestring("  shutdown          - power off the machine\n");
-    terminal_writestring("  calc <expr>       - calculator, e.g.: calc 2 + 3 * (4 - 1)\n");
+    terminal_writestring("  calc <expr>       - calculator, e.g.: calc 2^8 + 3 * (4 - 1)\n");
     terminal_writestring("Files and directories (stored in RAM, lost on reboot):\n");
     terminal_writestring("  ls                - list files/dirs in current directory\n");
     terminal_writestring("  pwd               - print current path\n");
@@ -156,7 +156,7 @@ static void cmd_shutdown(void) {
 /* Команда calc — парсит и вычисляет выражение через модуль calc.c */
 static void cmd_calc(const char* expr) {
     if (expr[0] == '\0') {
-        terminal_writestring("Usage: calc <expr>, e.g.: calc 2 + 3 * (4 - 1)\n");
+        terminal_writestring("Usage: calc <expr>, e.g.: calc 2^8 + 3 * (4 - 1)\n");
         return;
     }
 
