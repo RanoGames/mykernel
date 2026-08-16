@@ -17,6 +17,7 @@ int process_exec(const uint8_t* image, size_t size) {
     }
 
     user_heap_reset();
+    fd_table_reset();
 
     terminal_writestring("exec: entry=");
     terminal_write_hex(entry);
