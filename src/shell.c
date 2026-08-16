@@ -1,4 +1,4 @@
-/* shell.c — оболочка: история, скрипты (run), ELF (exec). */
+/* shell.c — оболочка: RAM FS, scripts, ELF, FAT32 */
 
 #include "shell.h"
 #include "vga.h"
@@ -6,6 +6,7 @@
 #include "fs.h"
 #include "calc.h"
 #include "process.h"
+#include "fat32.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -14,7 +15,6 @@
 #define HISTORY_SIZE    16
 #define RUN_LINE_MAX    128
 
-/* Встроенный hello.elf (objcopy -I binary build/hello.elf) */
 extern const uint8_t _binary_build_hello_elf_start[];
 extern const uint8_t _binary_build_hello_elf_end[];
 
@@ -164,14 +164,18 @@ static void print_fs_error(enum fs_result err) {
     terminal_putchar('\n');
 }
 
+static void print_fat_error(enum fat_result err) {
+    terminal_writestring("FAT: ");
+    terminal_writestring(fat_strerror(err));
+    terminal_putchar('\n');
+}
+
 static void cmd_help(void) {
     terminal_writestring("System: help clear echo about uname whoami free history\n");
     terminal_writestring("        reboot shutdown calc <expr>\n");
-    terminal_writestring("Files:  ls pwd cd mkdir touch cat rm write append cp mv\n");
-    terminal_writestring("Programs:\n");
-    terminal_writestring("  run <file>   - shell script (lines = commands)\n");
-    terminal_writestring("  exec hello   - run built-in ELF userspace program\n");
-    terminal_writestring("  exec <file>  - run ELF32 from RAM FS (if stored as binary)\n");
+    terminal_writestring("RAM FS: ls pwd cd mkdir touch cat rm write append cp mv\n");
+    terminal_writestring("FAT32:  fatmount  fatinfo  fatls [path]  fatcat <file>\n");
+    terminal_writestring("Programs: run <script> | exec hello\n");
 }
 
 static void cmd_reboot(void) {
@@ -287,10 +291,7 @@ static void cmd_mv(const char* args) {
 }
 
 static void cmd_run(const char* arg) {
-    if (arg[0] == '\0') {
-        terminal_writestring("Usage: run <file>\n");
-        return;
-    }
+    if (arg[0] == '\0') { terminal_writestring("Usage: run <file>\n"); return; }
     const char* content; size_t len;
     enum fs_result r = fs_read(arg, &content, &len);
     if (r != FS_OK) { print_fs_error(r); return; }
@@ -314,34 +315,50 @@ static void cmd_run(const char* arg) {
 
 static void cmd_exec(const char* arg) {
     if (arg[0] == '\0') {
-        terminal_writestring("Usage: exec hello   (built-in ELF)\n");
-        terminal_writestring("       exec <file>  (ELF32 from RAM FS)\n");
+        terminal_writestring("Usage: exec hello | exec <file>\n");
         return;
     }
-
     const uint8_t* image = 0;
     size_t size = 0;
-
     if (str_equals(arg, "hello")) {
         image = _binary_build_hello_elf_start;
         size = (size_t)(_binary_build_hello_elf_end - _binary_build_hello_elf_start);
     } else {
-        const char* content;
-        size_t len;
+        const char* content; size_t len;
         enum fs_result r = fs_read(arg, &content, &len);
         if (r != FS_OK) { print_fs_error(r); return; }
         image = (const uint8_t*)content;
         size = len;
     }
-
-    terminal_writestring("Loading ELF (" );
+    terminal_writestring("Loading ELF (");
     terminal_write_uint((uint32_t)size);
     terminal_writestring(" bytes)...\n");
-
     int code = process_exec(image, size);
     terminal_writestring("process exited with code ");
     terminal_write_int(code);
     terminal_putchar('\n');
+}
+
+static void cmd_fatmount(void) {
+    enum fat_result r = fat32_mount();
+    if (r != FAT_OK) { print_fat_error(r); return; }
+    terminal_writestring("FAT32 mounted OK\n");
+    fat32_info();
+}
+
+static void cmd_fatls(const char* path) {
+    if (!path || path[0] == '\0') path = "/";
+    enum fat_result r = fat32_ls(path);
+    if (r != FAT_OK) print_fat_error(r);
+}
+
+static void cmd_fatcat(const char* path) {
+    if (!path || path[0] == '\0') {
+        terminal_writestring("Usage: fatcat HELLO.TXT\n");
+        return;
+    }
+    enum fat_result r = fat32_cat(path);
+    if (r != FAT_OK) print_fat_error(r);
 }
 
 static void execute_command(const char* line) {
@@ -349,7 +366,7 @@ static void execute_command(const char* line) {
     else if (str_equals(line, "help")) cmd_help();
     else if (str_equals(line, "clear")) terminal_initialize();
     else if (str_equals(line, "about"))
-        terminal_writestring("MyKernel -- ELF exec + int 0x80 syscalls\n");
+        terminal_writestring("MyKernel -- ELF + syscalls + FAT32 (read-only)\n");
     else if (str_equals(line, "reboot")) cmd_reboot();
     else if (str_equals(line, "shutdown")) cmd_shutdown();
     else if (str_equals(line, "uname")) cmd_uname();
@@ -376,6 +393,12 @@ static void execute_command(const char* line) {
     else if (str_equals(line, "run")) cmd_run("");
     else if (str_starts_with(line, "exec ")) cmd_exec(line + 5);
     else if (str_equals(line, "exec")) cmd_exec("");
+    else if (str_equals(line, "fatmount")) cmd_fatmount();
+    else if (str_equals(line, "fatinfo")) fat32_info();
+    else if (str_starts_with(line, "fatls ")) cmd_fatls(line + 6);
+    else if (str_equals(line, "fatls")) cmd_fatls("/");
+    else if (str_starts_with(line, "fatcat ")) cmd_fatcat(line + 7);
+    else if (str_equals(line, "fatcat")) cmd_fatcat("");
     else {
         terminal_writestring("Unknown command: ");
         terminal_writestring(line);
@@ -386,7 +409,7 @@ static void execute_command(const char* line) {
 void shell_run(void) {
     char line[CMD_BUFFER_SIZE];
     char path[PWD_BUFFER_SIZE];
-    terminal_writestring("\nMyKernel shell. help | exec hello | run script\n");
+    terminal_writestring("\nMyKernel. help | fatmount | exec hello\n");
     for (;;) {
         fs_pwd(path, sizeof(path));
         terminal_writestring(path);
