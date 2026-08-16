@@ -31,8 +31,8 @@ else
     LINK_EXTRA_FLAGS =
 endif
 
-ASM_SOURCES = boot.s gdt_flush.s idt_load.s isr.s
-C_SOURCES   = kernel.c gdt.c serial.c vga.c idt.c irq.c keyboard.c shell.c fs.c calc.c syscall.c elf.c process.c ata.c fat32.c kmalloc.c mlang.c
+ASM_SOURCES = boot.s gdt_flush.s idt_load.s isr.s context_switch.s
+C_SOURCES   = kernel.c gdt.c serial.c vga.c idt.c irq.c keyboard.c shell.c fs.c calc.c syscall.c elf.c process.c ata.c fat32.c kmalloc.c mlang.c timer.c sched.c
 
 ASM_OBJECTS = $(ASM_SOURCES:%.s=$(BUILD_DIR)/%.o)
 C_OBJECTS   = $(C_SOURCES:%.c=$(BUILD_DIR)/%.o)
@@ -86,12 +86,11 @@ iso: $(BUILD_DIR)/mykernel.bin
 
 fat-image:
 ifeq ($(MKFS_FAT),)
-	@echo "ERROR: install dosfstools: sudo apt install -y dosfstools"
+	@echo "ERROR: install dosfstools"
 	@exit 1
 else
 	dd if=/dev/zero of=fat.img bs=1M count=32 status=none
 	$(MKFS_FAT) -F 32 fat.img
-	@echo "Created fat.img — make run-fat"
 endif
 
 run: $(BUILD_DIR)/mykernel.bin
@@ -101,11 +100,11 @@ run-nographic: $(BUILD_DIR)/mykernel.bin
 	qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin -nographic
 
 run-fat: $(BUILD_DIR)/mykernel.bin
-	@test -f fat.img || (echo "No fat.img — run: make fat-image"; exit 1)
+	@test -f fat.img || (echo "No fat.img"; exit 1)
 	qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin -drive file=fat.img,format=raw,if=ide
 
 run-iso: iso
 	qemu-system-i386 -cdrom $(BUILD_DIR)/mykernel.iso
 
 clean:
-	rm -rf $(BUILD_DIR) $(ISO_DIR)/boot/mykernel.bin $(ISO_DIR)/boot/grub/grub.cfg
+	rm -rf $(BUILD_DIR)
