@@ -3,6 +3,7 @@
 #define _UNISTD_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
