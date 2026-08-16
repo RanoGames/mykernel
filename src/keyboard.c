@@ -1,10 +1,4 @@
-/* keyboard.c — драйвер PS/2-клавиатуры + ввод из serial (-nographic).
- *
- * При нажатии клавиши контроллер кладёт скан-код в порт 0x60 и
- * поднимает IRQ1. Мы переводим его в ASCII и кладём в кольцевой буфер.
- * Стрелки приходят как extended-последовательность: 0xE0 + скан-код.
- *
- * При запуске QEMU с -nographic дополнительно читаем символы из COM1. */
+/* keyboard.c — PS/2 + serial */
 
 #include "keyboard.h"
 #include "isr.h"
@@ -14,13 +8,10 @@
 #include <stddef.h>
 
 #define KBD_DATA_PORT 0x60
-
 #define SC_RELEASE_MASK 0x80
 #define SC_EXTENDED     0xE0
-
 #define SC_LSHIFT 0x2A
 #define SC_RSHIFT 0x36
-
 #define SC_UP     0x48
 #define SC_DOWN   0x50
 #define SC_LEFT   0x4B
@@ -64,7 +55,6 @@ static void kbd_buffer_push(char c) {
 
 static void keyboard_irq_handler(struct registers* regs) {
     (void) regs;
-
     uint8_t scancode = inb(KBD_DATA_PORT);
 
     if (scancode == SC_EXTENDED) {
@@ -110,46 +100,38 @@ void keyboard_init(void) {
     irq_register_handler(1, keyboard_irq_handler);
 }
 
+int keyboard_trygetchar(char* out) {
+    if (kbd_head != kbd_tail) {
+        *out = kbd_buffer[kbd_tail];
+        kbd_tail = (kbd_tail + 1) % KBD_BUFFER_SIZE;
+        return 1;
+    }
+    if (serial_has_data()) {
+        char c = serial_read_char();
+        if (c == '\r') c = KEY_ENTER;
+        else if (c == 0x7F) c = KEY_BACKSPACE;
+        else if (c == 0x1B) {
+            if (!serial_has_data()) return 0;
+            char c2 = serial_read_char();
+            if (c2 != '[' || !serial_has_data()) return 0;
+            char c3 = serial_read_char();
+            if (c3 == 'A') { *out = KEY_UP; return 1; }
+            if (c3 == 'B') { *out = KEY_DOWN; return 1; }
+            if (c3 == 'C') { *out = KEY_RIGHT; return 1; }
+            if (c3 == 'D') { *out = KEY_LEFT; return 1; }
+            return 0;
+        }
+        *out = c;
+        return 1;
+    }
+    return 0;
+}
+
 char keyboard_getchar(void) {
     for (;;) {
-        /* PS/2-клавиатура (графическое окно QEMU) */
-        if (kbd_head != kbd_tail) {
-            char c = kbd_buffer[kbd_tail];
-            kbd_tail = (kbd_tail + 1) % KBD_BUFFER_SIZE;
+        char c;
+        if (keyboard_trygetchar(&c))
             return c;
-        }
-
-        /* Serial (режим -nographic) */
-        if (serial_has_data()) {
-            char c = serial_read_char();
-
-            if (c == '\r')
-                c = KEY_ENTER;
-            else if (c == 0x7F)
-                c = KEY_BACKSPACE;
-            /* ANSI escape для стрелок: ESC [ A/B/C/D */
-            else if (c == 0x1B) {
-                /* ждём '[' */
-                if (!serial_has_data()) {
-                    /* одиночный ESC — игнорируем */
-                    continue;
-                }
-                char c2 = serial_read_char();
-                if (c2 != '[')
-                    continue;
-                if (!serial_has_data())
-                    continue;
-                char c3 = serial_read_char();
-                if (c3 == 'A') return KEY_UP;
-                if (c3 == 'B') return KEY_DOWN;
-                if (c3 == 'C') return KEY_RIGHT;
-                if (c3 == 'D') return KEY_LEFT;
-                continue;
-            }
-
-            return c;
-        }
-
         __asm__ volatile ("hlt");
     }
 }
