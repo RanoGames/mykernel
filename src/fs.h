@@ -1,4 +1,4 @@
-/* fs.h — иерархическая файловая система в RAM (как tmpfs). */
+/* fs.h — hierarchical RAM FS (tmpfs-like). */
 
 #ifndef FS_H
 #define FS_H
@@ -38,7 +38,6 @@ enum fs_result fs_size(const char* name, size_t* out_size);
 enum fs_result fs_mkdir_p(const char* path);
 
 void fs_ls(void);
-/* index 0..N-1: имя в cwd. is_dir=1 если каталог. -1 если конец. */
 int fs_cwd_entry(int index, char* name_out, size_t name_sz, int* is_dir);
 void fs_pwd(char* buffer, size_t buffer_size);
 int fs_node_count(void);
