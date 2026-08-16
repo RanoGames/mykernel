@@ -1,20 +1,4 @@
-/* kernel.c — главный файл ядра: инициализация всех подсистем
- * и передача управления в shell.
- *
- * Порядок инициализации важен:
- *   1. своя GDT (нельзя полагаться на временную таблицу от загрузчика —
- *      именно её отсутствие вызывало Triple Fault при загрузке через
- *      настоящий GRUB, см. подробный комментарий в gdt.h)
- *   2. serial-порт (COM1) — дублирует весь дальнейший текстовый вывод,
- *      полезно для отладки и для запуска без графического окна QEMU
- *      ("-nographic"), если по каким-то причинам VGA-окно не отображается
- *   3. экран (чтобы можно было хоть что-то напечатать)
- *   4. IDT (таблица прерываний — must be готова ДО разрешения прерываний)
- *   5. обработчики исключений процессора (isr_install)
- *   6. обработчики аппаратных IRQ + перемаппинг PIC (irq_install)
- *   7. драйвер клавиатуры (регистрирует себя на IRQ1)
- *   8. sti — только теперь разрешаем процессору принимать прерывания
- *   9. shell — дальше управление живёт в бесконечном цикле оболочки */
+/* kernel.c — инициализация подсистем и shell */
 
 #include "gdt.h"
 #include "serial.h"
@@ -23,25 +7,31 @@
 #include "isr.h"
 #include "keyboard.h"
 #include "fs.h"
+#include "ata.h"
 #include "shell.h"
 
 void kernel_main(void) {
-    gdt_init();           /* СВОЯ GDT — должна быть настроена самой первой */
-    serial_init();          /* COM1 — до terminal_initialize(), чтобы ничего не потерять */
+    gdt_init();
+    serial_init();
 
     terminal_initialize();
     terminal_writestring("Hello, World!\n");
     terminal_writestring("Booting kernel subsystems...\n");
 
-    idt_init();          /* создать и загрузить таблицу прерываний */
-    isr_install();        /* обработчики исключений процессора (0-31) */
-    irq_install();         /* перемаппинг PIC + обработчики IRQ (32-47) */
-    keyboard_init();        /* драйвер клавиатуры подписывается на IRQ1 */
-    fs_init();                /* инициализация файловой системы в RAM */
+    idt_init();
+    isr_install();
+    irq_install();
+    keyboard_init();
+    fs_init();
 
-    __asm__ volatile ("sti"); /* разрешить прерывания — только теперь клавиатура заработает */
+    if (ata_init() == 0)
+        terminal_writestring("ATA: disk detected (use fatmount)\n");
+    else
+        terminal_writestring("ATA: no disk (optional — make run-fat)\n");
+
+    __asm__ volatile ("sti");
 
     terminal_writestring("Subsystems ready.\n");
 
-    shell_run(); /* дальше управление не возвращается — бесконечный цикл оболочки */
+    shell_run();
 }
