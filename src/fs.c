@@ -1,4 +1,4 @@
-/* fs.c — RAM-файловая система. */
+/* fs.c — RAM FS + /lib layout */
 
 #include "fs.h"
 #include "vga.h"
@@ -48,6 +48,12 @@ static void k_strcpy_truncate(char* dst, const char* src, size_t dst_size) {
     dst[i] = '\0';
 }
 
+static void k_memcpy(void* d, const void* s, size_t n) {
+    uint8_t* dd = (uint8_t*)d;
+    const uint8_t* ss = (const uint8_t*)s;
+    for (size_t i = 0; i < n; i++) dd[i] = ss[i];
+}
+
 void fs_init(void) {
     for (int i = 0; i < FS_MAX_NODES; i++)
         nodes[i].type = FS_TYPE_FREE;
@@ -56,6 +62,14 @@ void fs_init(void) {
     k_strcpy_truncate(nodes[FS_ROOT_INDEX].name, "/", FS_NAME_MAX);
     nodes[FS_ROOT_INDEX].parent = -1;
     cwd = FS_ROOT_INDEX;
+
+    /* дерево как у Linux: /lib */
+    fs_mkdir("lib");
+    fs_mkdir("bin");
+    fs_mkdir("usr");
+    fs_cd("usr");
+    fs_mkdir("lib");
+    fs_cd("/");
 }
 
 static int fs_alloc_node(void) {
@@ -137,6 +151,11 @@ enum fs_result fs_rm(const char* name) {
 }
 
 enum fs_result fs_write(const char* name, const char* text) {
+    return fs_write_bin(name, text, k_strlen(text));
+}
+
+enum fs_result fs_write_bin(const char* name, const void* data, size_t len) {
+    if (len >= FS_FILE_MAX) return FS_ERR_TOO_BIG;
     int idx = fs_find_child(cwd, name);
     if (idx == -1) {
         enum fs_result r = fs_touch(name);
@@ -144,8 +163,9 @@ enum fs_result fs_write(const char* name, const char* text) {
         idx = fs_find_child(cwd, name);
     }
     if (nodes[idx].type != FS_TYPE_FILE) return FS_ERR_IS_A_DIRECTORY;
-    k_strcpy_truncate(nodes[idx].content, text, FS_FILE_MAX);
-    nodes[idx].content_len = k_strlen(nodes[idx].content);
+    k_memcpy(nodes[idx].content, data, len);
+    nodes[idx].content[len] = '\0';
+    nodes[idx].content_len = len;
     return FS_OK;
 }
 
@@ -158,19 +178,14 @@ enum fs_result fs_append(const char* name, const char* text) {
     }
     if (nodes[idx].type != FS_TYPE_FILE) return FS_ERR_IS_A_DIRECTORY;
 
-    size_t tlen = k_strlen(text);
     size_t pos = nodes[idx].content_len;
-    /* добавим перевод строки перед новой порцией, если файл не пуст */
-    if (pos > 0 && pos + 1 < FS_FILE_MAX) {
+    if (pos > 0 && pos + 1 < FS_FILE_MAX)
         nodes[idx].content[pos++] = '\n';
-    }
     size_t i = 0;
-    while (text[i] && pos + 1 < FS_FILE_MAX) {
+    while (text[i] && pos + 1 < FS_FILE_MAX)
         nodes[idx].content[pos++] = text[i++];
-    }
     nodes[idx].content[pos] = '\0';
     nodes[idx].content_len = pos;
-    (void)tlen;
     return FS_OK;
 }
 
@@ -183,21 +198,98 @@ enum fs_result fs_read(const char* name, const char** out_content, size_t* out_l
     return FS_OK;
 }
 
+/* абсолютный или относительный путь: /lib/foo.so */
+enum fs_result fs_read_path(const char* path, const char** out_content, size_t* out_len) {
+    if (!path || !path[0]) return FS_ERR_NOT_FOUND;
+
+    int saved = cwd;
+    int dir = FS_ROOT_INDEX;
+    if (path[0] != '/')
+        dir = cwd;
+
+    const char* p = path;
+    if (*p == '/') p++;
+
+    char component[FS_NAME_MAX];
+    while (*p) {
+        size_t n = 0;
+        while (p[n] && p[n] != '/') {
+            if (n + 1 < FS_NAME_MAX) component[n] = p[n];
+            n++;
+        }
+        if (n >= FS_NAME_MAX) { cwd = saved; return FS_ERR_INVALID_NAME; }
+        component[n] = '\0';
+        p += n;
+        if (*p == '/') p++;
+
+        if (component[0] == '\0' || k_streq(component, "."))
+            continue;
+        if (k_streq(component, "..")) {
+            if (nodes[dir].parent != -1) dir = nodes[dir].parent;
+            continue;
+        }
+
+        int idx = fs_find_child(dir, component);
+        if (idx == -1) { cwd = saved; return FS_ERR_NOT_FOUND; }
+
+        if (*p == '\0') {
+            /* последний компонент — файл */
+            if (nodes[idx].type != FS_TYPE_FILE) { cwd = saved; return FS_ERR_IS_A_DIRECTORY; }
+            *out_content = nodes[idx].content;
+            *out_len = nodes[idx].content_len;
+            cwd = saved;
+            return FS_OK;
+        }
+        if (nodes[idx].type != FS_TYPE_DIR) { cwd = saved; return FS_ERR_NOT_A_DIRECTORY; }
+        dir = idx;
+    }
+    cwd = saved;
+    return FS_ERR_NOT_FOUND;
+}
+
+enum fs_result fs_mkdir_p(const char* path) {
+    if (!path || path[0] != '/') return FS_ERR_INVALID_NAME;
+    int saved = cwd;
+    cwd = FS_ROOT_INDEX;
+    const char* p = path + 1;
+    char component[FS_NAME_MAX];
+    while (*p) {
+        size_t n = 0;
+        while (p[n] && p[n] != '/') {
+            if (n + 1 < FS_NAME_MAX) component[n] = p[n];
+            n++;
+        }
+        component[n] = '\0';
+        p += n;
+        if (*p == '/') p++;
+        if (!component[0]) continue;
+        int idx = fs_find_child(cwd, component);
+        if (idx == -1) {
+            enum fs_result r = fs_mkdir(component);
+            if (r != FS_OK) { cwd = saved; return r; }
+            idx = fs_find_child(cwd, component);
+        }
+        if (nodes[idx].type != FS_TYPE_DIR) { cwd = saved; return FS_ERR_NOT_A_DIRECTORY; }
+        cwd = idx;
+    }
+    cwd = saved;
+    return FS_OK;
+}
+
 enum fs_result fs_cp(const char* src, const char* dst) {
     int sidx = fs_find_child(cwd, src);
     if (sidx == -1) return FS_ERR_NOT_FOUND;
     if (nodes[sidx].type != FS_TYPE_FILE) return FS_ERR_IS_A_DIRECTORY;
     if (!fs_is_valid_name(dst)) return FS_ERR_INVALID_NAME;
     if (fs_find_child(cwd, dst) != -1) return FS_ERR_ALREADY_EXISTS;
-
     int didx = fs_alloc_node();
     if (didx == -1) return FS_ERR_NO_SPACE;
-
     nodes[didx].type = FS_TYPE_FILE;
     k_strcpy_truncate(nodes[didx].name, dst, FS_NAME_MAX);
     nodes[didx].parent = cwd;
-    k_strcpy_truncate(nodes[didx].content, nodes[sidx].content, FS_FILE_MAX);
+    k_memcpy(nodes[didx].content, nodes[sidx].content, nodes[sidx].content_len);
     nodes[didx].content_len = nodes[sidx].content_len;
+    nodes[didx].content[nodes[didx].content_len] = '\0';
     return FS_OK;
 }
 
@@ -254,18 +346,15 @@ void fs_pwd(char* buffer, size_t buffer_size) {
     int path[FS_MAX_DEPTH];
     int depth = 0;
     int cur = cwd;
-
     while (cur != -1 && depth < FS_MAX_DEPTH) {
         path[depth++] = cur;
         cur = nodes[cur].parent;
     }
-
     size_t pos = 0;
     if (depth == 1) {
         k_strcpy_truncate(buffer, "/", buffer_size);
         return;
     }
-
     for (int i = depth - 2; i >= 0; i--) {
         const char* name = nodes[path[i]].name;
         size_t name_len = k_strlen(name);
@@ -278,14 +367,15 @@ void fs_pwd(char* buffer, size_t buffer_size) {
 
 const char* fs_strerror(enum fs_result err) {
     switch (err) {
-        case FS_OK:                  return "OK";
-        case FS_ERR_NOT_FOUND:       return "no such file or directory";
-        case FS_ERR_ALREADY_EXISTS:  return "already exists";
+        case FS_OK: return "OK";
+        case FS_ERR_NOT_FOUND: return "no such file or directory";
+        case FS_ERR_ALREADY_EXISTS: return "already exists";
         case FS_ERR_NOT_A_DIRECTORY: return "not a directory";
-        case FS_ERR_IS_A_DIRECTORY:  return "is a directory, not a file";
-        case FS_ERR_NO_SPACE:        return "no space left (file limit reached)";
-        case FS_ERR_DIR_NOT_EMPTY:   return "directory not empty";
-        case FS_ERR_INVALID_NAME:    return "invalid name";
-        default:                     return "unknown error";
+        case FS_ERR_IS_A_DIRECTORY: return "is a directory, not a file";
+        case FS_ERR_NO_SPACE: return "no space left";
+        case FS_ERR_DIR_NOT_EMPTY: return "directory not empty";
+        case FS_ERR_INVALID_NAME: return "invalid name";
+        case FS_ERR_TOO_BIG: return "file too big";
+        default: return "unknown error";
     }
 }
