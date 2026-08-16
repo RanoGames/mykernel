@@ -1,8 +1,4 @@
-/* fat32.h — read-only FAT32 на ATA-диске.
- *
- * Поддержка: mount, ls корня/подкаталогов, cat файла (8.3 имена).
- * LFN (длинные имена) пропускаются — видны только 8.3.
- */
+/* fat32.h — FAT32 read/write (8.3 names) на ATA-диске */
 
 #ifndef FAT32_H
 #define FAT32_H
@@ -20,15 +16,19 @@ enum fat_result {
     FAT_ERR_NOT_DIR,
     FAT_ERR_TOO_BIG,
     FAT_ERR_NOT_MOUNTED,
+    FAT_ERR_NO_SPACE,
+    FAT_ERR_EXISTS,
 };
 
 int fat32_mount(void);
 int fat32_is_mounted(void);
 void fat32_info(void);
 
-/* path: "" или "/" = корень; "DIR" или "DIR/FILE.TXT" (8.3) */
 enum fat_result fat32_ls(const char* path);
 enum fat_result fat32_cat(const char* path);
+
+/* Создать/перезаписать файл в корне (имя 8.3, например NOTE.TXT) */
+enum fat_result fat32_write(const char* name, const char* text);
 
 const char* fat_strerror(enum fat_result r);
 
