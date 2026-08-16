@@ -1,21 +1,14 @@
-/* fs.c — реализация RAM-файловой системы.
- *
- * Устройство максимально простое (специально, чтобы было понятно):
- * все узлы (файлы и папки) лежат в одном плоском статическом массиве
- * fixed-size (malloc у нас всё ещё нет). У каждого узла есть индекс
- * родителя — по нему мы и восстанавливаем "дерево" папок: чтобы
- * получить список содержимого папки X, просто ищем все узлы, у
- * которых parent == X. Это простое, но абсолютно рабочее дерево. */
+/* fs.c — реализация RAM-файловой системы. */
 
 #include "fs.h"
 #include "vga.h"
 
-#define FS_MAX_NODES 128   /* всего файлов+папок одновременно во всей ФС */
+#define FS_MAX_NODES 256
 #define FS_ROOT_INDEX 0
-#define FS_MAX_DEPTH  16   /* максимальная глубина вложенности папок для fs_pwd */
+#define FS_MAX_DEPTH  16
 
 enum fs_node_type {
-    FS_TYPE_FREE = 0,  /* слот свободен, можно использовать под новый узел */
+    FS_TYPE_FREE = 0,
     FS_TYPE_DIR,
     FS_TYPE_FILE,
 };
@@ -23,15 +16,13 @@ enum fs_node_type {
 struct fs_node {
     enum fs_node_type type;
     char name[FS_NAME_MAX];
-    int parent;                    /* индекс родительской папки, -1 у корня */
-    char content[FS_FILE_MAX];     /* используется только для FS_TYPE_FILE */
+    int parent;
+    char content[FS_FILE_MAX];
     size_t content_len;
 };
 
 static struct fs_node nodes[FS_MAX_NODES];
-static int cwd; /* индекс текущей директории (current working directory) */
-
-/* --- маленькие строковые утилиты (своя реализация, без libc) --- */
+static int cwd;
 
 static size_t k_strlen(const char* s) {
     size_t n = 0;
@@ -57,8 +48,6 @@ static void k_strcpy_truncate(char* dst, const char* src, size_t dst_size) {
     dst[i] = '\0';
 }
 
-/* --- внутренние помощники --- */
-
 void fs_init(void) {
     for (int i = 0; i < FS_MAX_NODES; i++)
         nodes[i].type = FS_TYPE_FREE;
@@ -70,7 +59,6 @@ void fs_init(void) {
     cwd = FS_ROOT_INDEX;
 }
 
-/* Найти свободный слот под новый узел. -1, если ФС переполнена. */
 static int fs_alloc_node(void) {
     for (int i = 0; i < FS_MAX_NODES; i++) {
         if (nodes[i].type == FS_TYPE_FREE)
@@ -79,7 +67,6 @@ static int fs_alloc_node(void) {
     return -1;
 }
 
-/* Найти дочерний узел с именем name внутри папки parent_idx. -1, если не найден. */
 static int fs_find_child(int parent_idx, const char* name) {
     for (int i = 0; i < FS_MAX_NODES; i++) {
         if (nodes[i].type != FS_TYPE_FREE &&
@@ -95,13 +82,11 @@ static int fs_is_valid_name(const char* name) {
     if (name[0] == '\0')
         return 0;
     if (k_streq(name, ".") || k_streq(name, ".."))
-        return 0; /* зарезервированные имена */
+        return 0;
     if (k_strlen(name) >= FS_NAME_MAX)
         return 0;
     return 1;
 }
-
-/* --- публичный интерфейс --- */
 
 enum fs_result fs_mkdir(const char* name) {
     if (!fs_is_valid_name(name))
@@ -165,8 +150,6 @@ enum fs_result fs_rm(const char* name) {
         return FS_ERR_NOT_FOUND;
 
     if (nodes[idx].type == FS_TYPE_DIR) {
-        /* проверяем, что папка пуста — не удаляем рекурсивно,
-         * чтобы случайно не снести что-то важное одной командой */
         for (int i = 0; i < FS_MAX_NODES; i++) {
             if (nodes[i].type != FS_TYPE_FREE && nodes[i].parent == idx)
                 return FS_ERR_DIR_NOT_EMPTY;
@@ -181,7 +164,6 @@ enum fs_result fs_write(const char* name, const char* text) {
     int idx = fs_find_child(cwd, name);
 
     if (idx == -1) {
-        /* файла нет — создаём автоматически, это удобнее для shell */
         enum fs_result r = fs_touch(name);
         if (r != FS_OK)
             return r;
@@ -225,8 +207,6 @@ void fs_ls(void) {
 }
 
 void fs_pwd(char* buffer, size_t buffer_size) {
-    /* Идём от текущей папки вверх к корню, запоминая индексы пути,
-     * потом печатаем их в обратном порядке (от корня к текущей). */
     int path[FS_MAX_DEPTH];
     int depth = 0;
     int cur = cwd;
@@ -236,12 +216,9 @@ void fs_pwd(char* buffer, size_t buffer_size) {
         cur = nodes[cur].parent;
     }
 
-    /* path[depth-1] — корень, path[0] — текущая папка. Собираем строку
-     * от корня к текущей папке. */
     size_t pos = 0;
 
     if (depth == 1) {
-        /* мы в корне */
         k_strcpy_truncate(buffer, "/", buffer_size);
         return;
     }
