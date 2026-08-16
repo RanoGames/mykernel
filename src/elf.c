@@ -92,14 +92,10 @@ enum elf_result elf_load(const uint8_t* image, size_t size, uint32_t* entry) {
         if (ph->p_offset + ph->p_filesz > size)
             return ELF_ERR_NO_LOAD;
 
-        /* Окно mykernel: 0x400000..+ELF_LOAD_MAX, либо классический Linux 0x08048000.. */
+        /* User window: 1MB .. 64MB (covers 0x3ff000 PHDR page + 0x400000 text + Linux base) */
         {
             uint32_t vend = ph->p_vaddr + ph->p_memsz;
-            int ok_mk = (ph->p_vaddr >= ELF_LOAD_BASE &&
-                         vend <= ELF_LOAD_BASE + ELF_LOAD_MAX);
-            int ok_lx = (ph->p_vaddr >= ELF_LINUX_BASE &&
-                         vend <= ELF_LINUX_BASE + ELF_LINUX_MAX);
-            if (!ok_mk && !ok_lx)
+            if (ph->p_vaddr < 0x00100000u || vend > 0x04000000u)
                 return ELF_ERR_TOO_BIG;
         }
 
