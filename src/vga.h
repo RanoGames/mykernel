@@ -1,6 +1,4 @@
-/* vga.h — интерфейс простого "терминала" на текстовом VGA-экране.
- * Вынесен в отдельный модуль, чтобы им могли пользоваться и kernel.c,
- * и клавиатура, и shell — без дублирования кода. */
+/* vga.h — интерфейс простого "терминала" на текстовом VGA-экране. */
 
 #ifndef VGA_H
 #define VGA_H
@@ -31,18 +29,20 @@ void terminal_initialize(void);
 void terminal_setcolor(uint8_t color);
 void terminal_putchar(char c);
 void terminal_writestring(const char* data);
-/* Стереть последний введённый символ (для реализации Backspace в shell) */
 void terminal_backspace(void);
 
-/* Скрыть аппаратный мигающий курсор (например, для полноэкранного
- * интерфейса без текстового ввода). Позвать снова с show_cursor(),
- * чтобы вернуть его — обе функции ниже. */
 void terminal_hide_cursor(void);
 void terminal_show_cursor(void);
 
-/* Небольшие вспомогательные функции для форматированного вывода без printf */
-void terminal_write_uint(uint32_t value);   /* вывести число в десятичном виде */
-void terminal_write_int(int32_t value);     /* вывести ЗНАКОВОЕ число (с минусом при необходимости) */
-void terminal_write_hex(uint32_t value);    /* вывести число в шестнадцатеричном виде */
+/* Управление позицией курсора (для редактирования строки в shell) */
+void terminal_get_cursor(size_t* x, size_t* y);
+void terminal_set_cursor(size_t x, size_t y);
+void terminal_move_left(size_t n);
+void terminal_move_right(size_t n);
+void terminal_putchar_at_cursor(char c);
+
+void terminal_write_uint(uint32_t value);
+void terminal_write_int(int32_t value);
+void terminal_write_hex(uint32_t value);
 
 #endif
