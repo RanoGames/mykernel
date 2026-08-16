@@ -26,11 +26,9 @@ void fat32_info(void);
 
 enum fat_result fat32_ls(const char* path);
 enum fat_result fat32_cat(const char* path);
-
-/* Создать/перезаписать файл в корне (имя 8.3, например NOTE.TXT) */
 enum fat_result fat32_write(const char* name, const char* text);
 
-/* Прочитать файл в буфер. *out_len = байт прочитано */
+/* Прочитать файл в буфер (*out_len = размер). Добавьте реализацию в fat32.c если линкер ругается. */
 enum fat_result fat32_read_file(const char* name, char* buf, size_t buf_size, size_t* out_len);
 
 const char* fat_strerror(enum fat_result r);
