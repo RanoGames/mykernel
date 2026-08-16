@@ -1,4 +1,4 @@
-/* timer.c — Programmable Interval Timer, IRQ0 */
+/* timer.c — Programmable Interval Timer (PIT), IRQ0 */
 
 #include "timer.h"
 #include "isr.h"
@@ -18,12 +18,17 @@ static void timer_callback(struct registers* regs) {
     sched_on_tick();
 }
 
+/* hz: typically 100 (10 ms/tick) or 1000 (1 ms). 0 -> 100. */
 void timer_init(uint32_t hz) {
     if (hz == 0) hz = 100;
-    uint32_t divisor = PIT_BASE_HZ / hz;
-    if (divisor == 0) divisor = 1;
+    if (hz > 1000) hz = 1000;
 
-    outb(PIT_COMMAND, 0x36); /* ch0, lobyte/hibyte, mode 3 */
+    uint32_t divisor = PIT_BASE_HZ / hz;
+    if (divisor < 1) divisor = 1;
+    if (divisor > 65535) divisor = 65535;
+
+    /* Mode 3 (square wave), channel 0, access lobyte/hibyte */
+    outb(PIT_COMMAND, 0x36);
     outb(PIT_CHANNEL0, (uint8_t)(divisor & 0xFF));
     outb(PIT_CHANNEL0, (uint8_t)((divisor >> 8) & 0xFF));
 
@@ -32,11 +37,6 @@ void timer_init(uint32_t hz) {
     irq_register_handler(0, timer_callback);
 }
 
-/* Блокирующая задержка в миллисекундах — крутимся (в hlt, чтобы не
- * жечь CPU впустую), пока не наберётся нужное количество тиков.
- * Годится только для коротких пауз при инициализации устройств
- * (как в ac97.c) — для нормальной многозадачности такие блокирующие
- * ожидания не подходят, там нужен sched_sleep() или аналог. */
 void timer_sleep_ms(uint32_t ms) {
     uint32_t ticks_needed = (g_hz * ms) / 1000;
     if (ticks_needed == 0)
@@ -49,4 +49,8 @@ void timer_sleep_ms(uint32_t ms) {
 
 uint32_t timer_ticks(void) {
     return g_ticks;
+}
+
+uint32_t timer_hz(void) {
+    return g_hz;
 }

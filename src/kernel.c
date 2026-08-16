@@ -25,7 +25,7 @@ void kernel_main(void) {
     serial_init();
 
     terminal_initialize();
-    terminal_writestring("Hello, World!\n");
+    terminal_writestring("MyKernel booting...\n");
     terminal_writestring("Booting kernel subsystems...\n");
 
     kmalloc_init();
@@ -39,7 +39,7 @@ void kernel_main(void) {
     fs_init();
     dyld_install_lib_tree();
     sched_init();
-    timer_init(100);
+    timer_init(100); /* PIT IRQ0 @ 100 Hz (10 ms/tick) */
 
     if (ata_init() == 0)
         terminal_writestring("ATA: disk detected\n");
@@ -52,6 +52,6 @@ void kernel_main(void) {
     settings_init();
     vbe_probe();
 
-    terminal_writestring("Ready. settings | vbtest | snake | help\n");
+    terminal_writestring("Ready. settings | vbetest | snake | pong | help\n");
     shell_run();
 }
