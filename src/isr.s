@@ -68,8 +68,6 @@ IRQ 14, 46
 IRQ 15, 47
 
 .extern isr_handler
-.extern syscall_handler
-
 isr_common_stub:
     pusha
 
@@ -83,20 +81,7 @@ isr_common_stub:
     mov %ax, %gs
 
     push %esp
-
-    /* int_no лежит после pusha (8 regs) + ds = смещение 36 от текущего esp?
-     * Структура registers на стеке: после pusha и push ds, esp указывает на ds.
-     * int_no = offset после ds, edi..eax (8*4) → 4+32=36
-     * Проще: вызываем isr_handler всегда, а для 128 — из C не дойдём:
-     * перехватываем здесь. */
-    mov 36(%esp), %eax   /* int_no: ds(4) + pusha(32) = 36 */
-    cmp $128, %eax
-    jne 1f
-    call syscall_handler
-    jmp 2f
-1:
     call isr_handler
-2:
     add $4, %esp
 
     pop %eax
