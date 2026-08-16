@@ -17,6 +17,8 @@
 #include "pci.h"
 #include "ac97.h"
 #include "shell.h"
+#include "settings.h"
+#include "vbe.h"
 
 void kernel_main(void) {
     gdt_init();
@@ -46,11 +48,10 @@ void kernel_main(void) {
 
     __asm__ volatile ("sti");
 
-    /* ac97_init() использует timer_sleep_ms() для пауз при сбросе
-     * чипа — это требует уже разрешённых прерываний (IRQ0 таймера),
-     * поэтому инициализируем звук именно после "sti", а не раньше */
     ac97_init();
+    settings_init();
+    vbe_probe();
 
-    terminal_writestring("Ready. Type 'snake' for game, 'help' for commands.\n");
+    terminal_writestring("Ready. settings | vbtest | snake | help\n");
     shell_run();
 }
