@@ -35,18 +35,17 @@ else
 endif
 
 ASM_SOURCES = boot.s gdt_flush.s idt_load.s isr.s
-C_SOURCES   = kernel.c gdt.c serial.c vga.c idt.c irq.c keyboard.c shell.c fs.c calc.c syscall.c elf.c process.c ata.c fat32.c
+C_SOURCES   = kernel.c gdt.c serial.c vga.c idt.c irq.c keyboard.c shell.c fs.c calc.c syscall.c elf.c process.c ata.c fat32.c kmalloc.c
 
 ASM_OBJECTS = $(ASM_SOURCES:%.s=$(BUILD_DIR)/%.o)
 C_OBJECTS   = $(C_SOURCES:%.c=$(BUILD_DIR)/%.o)
 
 USER_ELF    = $(BUILD_DIR)/hello.elf
 USER_BLOB   = $(BUILD_DIR)/hello_blob.o
-USER_LIB_OBJS = $(BUILD_DIR)/user_stdio.o $(BUILD_DIR)/user_string.o
+USER_LIB_OBJS = $(BUILD_DIR)/user_stdio.o $(BUILD_DIR)/user_string.o $(BUILD_DIR)/user_malloc.o
 
 OBJECTS = $(BUILD_DIR)/boot.o $(filter-out $(BUILD_DIR)/boot.o,$(ASM_OBJECTS)) $(C_OBJECTS) $(USER_BLOB)
 
-# mkfs: разные имена в разных дистрибутивах
 MKFS_FAT := $(shell command -v mkfs.vfat 2>/dev/null || command -v mkfs.fat 2>/dev/null)
 
 .PHONY: all clean run run-iso run-nographic run-fat iso user fat-image
@@ -62,11 +61,13 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.s | $(BUILD_DIR)
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(wildcard $(SRC_DIR)/*.h) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# --- Userspace libc + hello ---
 $(BUILD_DIR)/user_stdio.o: $(USER_DIR)/lib/stdio.c $(wildcard $(USER_DIR)/include/*.h) | $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/user_string.o: $(USER_DIR)/lib/string.c $(wildcard $(USER_DIR)/include/*.h) | $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/user_malloc.o: $(USER_DIR)/lib/malloc.c $(wildcard $(USER_DIR)/include/*.h) | $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
 user: $(USER_ELF)
@@ -86,32 +87,14 @@ iso: $(BUILD_DIR)/mykernel.bin
 	cp $(SRC_DIR)/grub.cfg $(ISO_DIR)/boot/grub/grub.cfg
 	grub-mkrescue -o $(BUILD_DIR)/mykernel.iso $(ISO_DIR)
 
-# Образ FAT32: нужен пакет dosfstools
 fat-image:
 ifeq ($(MKFS_FAT),)
-	@echo ""
-	@echo "ERROR: mkfs.vfat / mkfs.fat not found."
-	@echo "Install dosfstools, then retry:"
-	@echo "  sudo apt update && sudo apt install -y dosfstools"
-	@echo ""
+	@echo "ERROR: install dosfstools: sudo apt install -y dosfstools"
 	@exit 1
 else
 	dd if=/dev/zero of=fat.img bs=1M count=32 status=none
 	$(MKFS_FAT) -F 32 fat.img
-	@echo "FAT image created: fat.img"
-	@echo "Adding sample files with mtools if available..."
-	@if command -v mcopy >/dev/null 2>&1; then \
-		echo "Hello from FAT32" > /tmp/myk_hello.txt; \
-		echo "MyKernel test file" > /tmp/myk_test.txt; \
-		mcopy -i fat.img /tmp/myk_hello.txt ::HELLO.TXT; \
-		mcopy -i fat.img /tmp/myk_test.txt ::TEST.TXT; \
-		echo "Sample files added (mtools)."; \
-	else \
-		echo "mtools not installed — empty FAT ok."; \
-		echo "Optional: sudo apt install mtools"; \
-		echo "Or write files from the OS: fatmount && fatwrite HELLO.TXT hi"; \
-	fi
-	@echo "Run: make run-fat"
+	@echo "Created fat.img — make run-fat"
 endif
 
 run: $(BUILD_DIR)/mykernel.bin
