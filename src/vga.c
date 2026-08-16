@@ -1,6 +1,4 @@
-/* vga.c — реализация текстового терминала поверх видеопамяти VGA (0xB8000).
- * Подробные комментарии про формат видеопамяти были в первой версии
- * kernel.c — здесь тот же принцип, просто вынесено в отдельный модуль. */
+/* vga.c — текстовый терминал VGA + дублирование вывода в COM1. */
 
 #include "vga.h"
 #include "io.h"
@@ -10,12 +8,6 @@
 #define VGA_WIDTH   80
 #define VGA_HEIGHT  25
 
-/* Порты видеоконтроллера (CRT Controller) для управления АППАРАТНЫМ
- * мигающим курсором. Это отдельная вещь от того, что мы сами рисуем
- * в видеопамяти — курсор реализован на уровне самой видеокарты, и
- * у него своя позиция, за которой нужно следить отдельно. Если её
- * не обновлять, курсор так и останется там, где был изначально
- * (обычно 0,0), сколько бы текста мы ни печатали. */
 #define VGA_CTRL_PORT 0x3D4
 #define VGA_DATA_PORT 0x3D5
 
@@ -32,18 +24,13 @@ static size_t terminal_column;
 static uint8_t terminal_color;
 static uint16_t* terminal_buffer;
 
-/* Переместить аппаратный курсор в позицию (x, y).
- * Позиция передаётся видеокарте как ОДНО число — индекс ячейки от
- * начала экрана (y * ширина + x), а не отдельно x и y. Индекс 16-битный,
- * поэтому пишем его двумя байтами через два разных регистра CRTC:
- * 0x0E — старший байт, 0x0F — младший байт. */
 static void update_cursor(size_t x, size_t y) {
     uint16_t pos = (uint16_t)(y * VGA_WIDTH + x);
 
-    outb(VGA_CTRL_PORT, 0x0F);                  /* выбираем регистр "младший байт позиции курсора" */
+    outb(VGA_CTRL_PORT, 0x0F);
     outb(VGA_DATA_PORT, (uint8_t)(pos & 0xFF));
 
-    outb(VGA_CTRL_PORT, 0x0E);                  /* выбираем регистр "старший байт позиции курсора" */
+    outb(VGA_CTRL_PORT, 0x0E);
     outb(VGA_DATA_PORT, (uint8_t)((pos >> 8) & 0xFF));
 }
 
@@ -61,15 +48,6 @@ void terminal_initialize(void) {
         for (size_t x = 0; x < VGA_WIDTH; x++)
             terminal_buffer[y * VGA_WIDTH + x] = vga_entry(' ', terminal_color);
 
-    /* Настоящий GRUB (в отличие от упрощённого загрузчика QEMU при
-     * "-kernel") может оставить аппаратный курсор ВЫКЛЮЧЕННЫМ — он
-     * прячет его на время своей работы (меню, загрузка) и не обязан
-     * включать обратно. Раньше мы только двигали позицию курсора
-     * (update_cursor), но никогда явно не снимали флаг "курсор скрыт" —
-     * из-за этого под настоящим GRUB курсор не был виден, хотя под
-     * `make run` всё работало. terminal_show_cursor() явно включает
-     * курсор и задаёт его форму (сканлинии 13-14 — обычное подчёркивание),
-     * так что теперь это не зависит от того, что оставил загрузчик. */
     terminal_show_cursor();
     update_cursor(terminal_column, terminal_row);
 }
@@ -90,12 +68,7 @@ static void terminal_scroll(void) {
 }
 
 void terminal_putchar(char c) {
-    /* Дублируем вывод в последовательный порт (COM1). Это НЕ мешает
-     * обычному VGA-выводу — просто параллельная копия того же текста.
-     * Благодаря этому один и тот же код (shell, kernel.c и т.д.)
-     * одинаково виден что в графическом окне QEMU, что в обычном
-     * терминале при запуске "qemu-system-i386 -kernel ... -nographic",
-     * если у вас не получается увидеть графическое окно. */
+    /* Дублируем вывод в COM1 (для -nographic) */
     serial_putchar(c);
 
     if (c == '\n') {
@@ -115,27 +88,19 @@ void terminal_putchar(char c) {
     update_cursor(terminal_column, terminal_row);
 }
 
-/* Стереть последний символ: подвинуть курсор назад и записать пробел.
- * Используется в shell при обработке клавиши Backspace.
- * Не переходит на предыдущую строку — простая реализация, этого
- * достаточно для однострочного ввода команд. */
 void terminal_backspace(void) {
     if (terminal_column == 0)
-        return; /* в начале строки стирать нечего (упрощённо) */
+        return;
     terminal_column--;
     terminal_putentryat(' ', terminal_color, terminal_column, terminal_row);
     update_cursor(terminal_column, terminal_row);
 }
 
-/* Скрыть аппаратный курсор: устанавливаем бит 5 в регистре 0x0A CRTC
- * (Cursor Start Register) — это стандартный способ его "выключить" */
 void terminal_hide_cursor(void) {
     outb(VGA_CTRL_PORT, 0x0A);
-    outb(VGA_DATA_PORT, 0x20); /* бит 5 = 1 -> курсор невидим */
+    outb(VGA_DATA_PORT, 0x20);
 }
 
-/* Показать курсор обратно: обычные значения "начало/конец сканлинии"
- * для курсора-подчёркивания (13 и 14 из 16 строк символа) */
 void terminal_show_cursor(void) {
     outb(VGA_CTRL_PORT, 0x0A);
     outb(VGA_DATA_PORT, 13);
@@ -144,14 +109,46 @@ void terminal_show_cursor(void) {
     update_cursor(terminal_column, terminal_row);
 }
 
+void terminal_get_cursor(size_t* x, size_t* y) {
+    if (x) *x = terminal_column;
+    if (y) *y = terminal_row;
+}
+
+void terminal_set_cursor(size_t x, size_t y) {
+    if (x >= VGA_WIDTH) x = VGA_WIDTH - 1;
+    if (y >= VGA_HEIGHT) y = VGA_HEIGHT - 1;
+    terminal_column = x;
+    terminal_row = y;
+    update_cursor(terminal_column, terminal_row);
+}
+
+void terminal_move_left(size_t n) {
+    while (n > 0 && terminal_column > 0) {
+        terminal_column--;
+        n--;
+    }
+    update_cursor(terminal_column, terminal_row);
+}
+
+void terminal_move_right(size_t n) {
+    while (n > 0 && terminal_column < VGA_WIDTH - 1) {
+        terminal_column++;
+        n--;
+    }
+    update_cursor(terminal_column, terminal_row);
+}
+
+void terminal_putchar_at_cursor(char c) {
+    terminal_putentryat(c, terminal_color, terminal_column, terminal_row);
+}
+
 void terminal_writestring(const char* data) {
     for (size_t i = 0; data[i] != '\0'; i++)
         terminal_putchar(data[i]);
 }
 
-/* Вывод числа в десятичном виде */
 void terminal_write_uint(uint32_t value) {
-    char buf[11]; /* максимум 10 цифр для 32-бит + '\0' */
+    char buf[11];
     int i = 10;
     buf[10] = '\0';
 
@@ -167,20 +164,15 @@ void terminal_write_uint(uint32_t value) {
     terminal_writestring(&buf[i]);
 }
 
-/* Вывод ЗНАКОВОГО числа: печатаем минус (если нужно), а дальше
- * переиспользуем уже написанную terminal_write_uint для модуля числа */
 void terminal_write_int(int32_t value) {
     if (value < 0) {
         terminal_writestring("-");
-        /* Осторожно: -value для INT32_MIN переполнил бы int32_t, поэтому
-         * считаем беззнаково через приведение типа, а не через "-value" напрямую */
         terminal_write_uint((uint32_t)(-(int64_t)value));
     } else {
         terminal_write_uint((uint32_t)value);
     }
 }
 
-/* Вывод числа в шестнадцатеричном виде (например, для адресов) */
 void terminal_write_hex(uint32_t value) {
     const char* hex_digits = "0123456789ABCDEF";
     char buf[9];
