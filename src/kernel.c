@@ -1,4 +1,4 @@
-/* kernel.c — инициализация подсистем и shell */
+/* kernel.c */
 
 #include "gdt.h"
 #include "serial.h"
@@ -6,6 +6,7 @@
 #include "idt.h"
 #include "isr.h"
 #include "keyboard.h"
+#include "mouse.h"
 #include "fs.h"
 #include "ata.h"
 #include "kmalloc.h"
@@ -30,19 +31,19 @@ void kernel_main(void) {
     isr_install();
     irq_install();
     keyboard_init();
+    mouse_init();
     fs_init();
-    dyld_install_lib_tree(); /* /lib/libhello.so, /bin/dynhello */
+    dyld_install_lib_tree();
     sched_init();
     timer_init(100);
 
     if (ata_init() == 0)
-        terminal_writestring("ATA: disk detected (use fatmount)\n");
+        terminal_writestring("ATA: disk detected\n");
     else
-        terminal_writestring("ATA: no disk (optional — make run-fat)\n");
+        terminal_writestring("ATA: no disk\n");
 
     __asm__ volatile ("sti");
 
-    terminal_writestring("Subsystems ready (dyld + scheduler).\n");
-
+    terminal_writestring("Ready. Type 'snake' for game, 'help' for commands.\n");
     shell_run();
 }
