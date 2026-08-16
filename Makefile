@@ -33,7 +33,7 @@ else
 endif
 
 ASM_SOURCES = boot.s gdt_flush.s idt_load.s isr.s context_switch.s
-C_SOURCES   = kernel.c gdt.c serial.c vga.c idt.c irq.c keyboard.c shell.c fs.c calc.c syscall.c elf.c process.c ata.c fat32.c kmalloc.c mlang.c timer.c sched.c dyld.c gfx.c mouse.c snake.c sound.c pci.c ac97.c
+C_SOURCES   = kernel.c gdt.c serial.c vga.c idt.c irq.c keyboard.c shell.c fs.c calc.c syscall.c elf.c process.c ata.c fat32.c kmalloc.c mlang.c timer.c sched.c dyld.c gfx.c mouse.c snake.c sound.c pci.c ac97.c vbe.c settings.c
 
 ASM_OBJECTS = $(ASM_SOURCES:%.s=$(BUILD_DIR)/%.o)
 C_OBJECTS   = $(C_SOURCES:%.c=$(BUILD_DIR)/%.o)
@@ -50,7 +50,7 @@ OBJECTS = $(BUILD_DIR)/boot.o $(filter-out $(BUILD_DIR)/boot.o,$(ASM_OBJECTS)) $
 
 MKFS_FAT := $(shell command -v mkfs.vfat 2>/dev/null || command -v mkfs.fat 2>/dev/null)
 
-.PHONY: all clean run run-iso run-nographic run-fat iso user fat-image
+.PHONY: all clean run run-iso run-nographic run-fat run-vbe iso user fat-image
 
 all: $(BUILD_DIR)/mykernel.bin
 
@@ -114,23 +114,25 @@ else
 	$(MKFS_FAT) -F 32 fat.img
 endif
 
-# -machine pcspk-audiodev=spk + audiodev — звук спикера в QEMU
 run: $(BUILD_DIR)/mykernel.bin
-	qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin \
+	qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin -vga std \
 		-audiodev pa,id=spk -machine pcspk-audiodev=spk 2>/dev/null \
-	|| qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin \
+	|| qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin -vga std \
 		-audiodev sdl,id=spk -machine pcspk-audiodev=spk 2>/dev/null \
-	|| qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin
+	|| qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin -vga std
 
 run-nographic: $(BUILD_DIR)/mykernel.bin
 	qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin -nographic
 
 run-fat: $(BUILD_DIR)/mykernel.bin
-	@test -f fat.img || (echo "No fat.img"; exit 1)
-	qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin -drive file=fat.img,format=raw,if=ide
+	@test -f fat.img || (echo "No fat.img — make fat-image"; exit 1)
+	qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin -drive file=fat.img,format=raw,if=ide -vga std
+
+run-vbe: $(BUILD_DIR)/mykernel.bin
+	qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin -vga std
 
 run-iso: iso
-	qemu-system-i386 -cdrom $(BUILD_DIR)/mykernel.iso
+	qemu-system-i386 -cdrom $(BUILD_DIR)/mykernel.iso -vga std
 
 clean:
 	rm -rf $(BUILD_DIR)
