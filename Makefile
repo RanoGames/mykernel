@@ -33,7 +33,7 @@ else
 endif
 
 ASM_SOURCES = boot.s gdt_flush.s idt_load.s isr.s context_switch.s
-C_SOURCES   = kernel.c gdt.c serial.c vga.c idt.c irq.c keyboard.c shell.c fs.c calc.c syscall.c elf.c process.c ata.c fat32.c kmalloc.c mlang.c timer.c sched.c dyld.c gfx.c mouse.c snake.c sound.c pci.c ac97.c vbe.c settings.c
+C_SOURCES   = kernel.c gdt.c serial.c vga.c idt.c irq.c keyboard.c shell.c fs.c calc.c syscall.c elf.c process.c ata.c fat32.c kmalloc.c mlang.c timer.c sched.c dyld.c gfx.c mouse.c snake.c pong.c sound.c pci.c ac97.c vbe.c settings.c
 
 ASM_OBJECTS = $(ASM_SOURCES:%.s=$(BUILD_DIR)/%.o)
 C_OBJECTS   = $(C_SOURCES:%.c=$(BUILD_DIR)/%.o)

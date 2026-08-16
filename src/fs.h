@@ -35,9 +35,11 @@ enum fs_result fs_read_path(const char* path, const char** out_content, size_t* 
 enum fs_result fs_cp(const char* src, const char* dst);
 enum fs_result fs_mv(const char* src, const char* dst);
 enum fs_result fs_size(const char* name, size_t* out_size);
-enum fs_result fs_mkdir_p(const char* path); /* /lib/foo */
+enum fs_result fs_mkdir_p(const char* path);
 
 void fs_ls(void);
+/* index 0..N-1: имя в cwd. is_dir=1 если каталог. -1 если конец. */
+int fs_cwd_entry(int index, char* name_out, size_t name_sz, int* is_dir);
 void fs_pwd(char* buffer, size_t buffer_size);
 int fs_node_count(void);
 const char* fs_strerror(enum fs_result err);
