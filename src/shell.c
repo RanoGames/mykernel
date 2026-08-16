@@ -1,4 +1,4 @@
-/* shell.c — RAM FS, ELF, FAT32, MyLang, scheduler */
+/* shell.c — RAM FS, ELF, FAT32, MyLang, scheduler, dyld */
 
 #include "shell.h"
 #include "vga.h"
@@ -21,6 +21,8 @@
 
 extern const uint8_t _binary_build_hello_elf_start[];
 extern const uint8_t _binary_build_hello_elf_end[];
+extern const uint8_t _binary_build_dynhello_elf_start[];
+extern const uint8_t _binary_build_dynhello_elf_end[];
 
 static char history[HISTORY_SIZE][CMD_BUFFER_SIZE];
 static int history_count = 0;
@@ -180,7 +182,7 @@ static void cmd_help(void) {
     terminal_writestring("FAT32:  fatmount fatinfo fatls fatcat fatwrite\n");
     terminal_writestring("Lang:   lang | lang <file>\n");
     terminal_writestring("Tasks:  ps  spawn\n");
-    terminal_writestring("Programs: run <script> | exec hello\n");
+    terminal_writestring("Programs: exec hello | exec dynhello\n");
 }
 
 static void cmd_reboot(void) {
@@ -326,7 +328,7 @@ static void cmd_run(const char* arg) {
 
 static void cmd_exec(const char* arg) {
     if (arg[0] == '\0') {
-        terminal_writestring("Usage: exec hello | exec <file>\n");
+        terminal_writestring("Usage: exec hello | exec dynhello | exec <file>\n");
         return;
     }
     const uint8_t* image = 0;
@@ -334,9 +336,14 @@ static void cmd_exec(const char* arg) {
     if (str_equals(arg, "hello")) {
         image = _binary_build_hello_elf_start;
         size = (size_t)(_binary_build_hello_elf_end - _binary_build_hello_elf_start);
+    } else if (str_equals(arg, "dynhello")) {
+        image = _binary_build_dynhello_elf_start;
+        size = (size_t)(_binary_build_dynhello_elf_end - _binary_build_dynhello_elf_start);
     } else {
         const char* content; size_t len;
         enum fs_result r = fs_read(arg, &content, &len);
+        if (r != FS_OK)
+            r = fs_read_path(arg, &content, &len);
         if (r != FS_OK) { print_fs_error(r); return; }
         image = (const uint8_t*)content;
         size = len;
@@ -443,7 +450,7 @@ static void execute_command(const char* line) {
     else if (str_equals(line, "help")) cmd_help();
     else if (str_equals(line, "clear")) terminal_initialize();
     else if (str_equals(line, "about"))
-        terminal_writestring("MyKernel -- scheduler + MyLang + ELF + FAT32\n");
+        terminal_writestring("MyKernel -- dyld + scheduler + ELF + FAT32\n");
     else if (str_equals(line, "reboot")) cmd_reboot();
     else if (str_equals(line, "shutdown")) cmd_shutdown();
     else if (str_equals(line, "uname")) cmd_uname();
@@ -492,7 +499,7 @@ static void execute_command(const char* line) {
 void shell_run(void) {
     char line[CMD_BUFFER_SIZE];
     char path[PWD_BUFFER_SIZE];
-    terminal_writestring("\nMyKernel. help | ps | spawn | lang\n");
+    terminal_writestring("\nMyKernel. help | exec dynhello | ls /lib\n");
     for (;;) {
         fs_pwd(path, sizeof(path));
         terminal_writestring(path);
