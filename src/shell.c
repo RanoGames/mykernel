@@ -13,6 +13,8 @@
 #include "timer.h"
 #include "snake.h"
 #include "sound.h"
+#include "pci.h"
+#include "ac97.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -185,6 +187,7 @@ static void cmd_help(void) {
     terminal_writestring("Lang:   lang | lang <file>\n");
     terminal_writestring("Tasks:  ps  spawn\n");
     terminal_writestring("Games:  snake  beep [freq|err|coin]\n");
+    terminal_writestring("PCI:    lspci  beep97 [freq] (AC97 DMA test tone)\n");
     terminal_writestring("Programs: exec hello | exec dynhello\n");
 }
 
@@ -394,6 +397,24 @@ static void cmd_beep(const char* arg) {
     sound_beep(f, 120);
 }
 
+static void cmd_lspci(void) {
+    pci_scan_and_print();
+}
+
+static void cmd_beep97(const char* arg) {
+    if (!ac97_is_present()) {
+        terminal_writestring("ac97: device not available (was it found at boot?)\n");
+        return;
+    }
+    uint32_t f = 0;
+    for (const char* p = arg; *p >= '0' && *p <= '9'; p++)
+        f = f * 10 + (uint32_t)(*p - '0');
+    if (f == 0) f = 440;
+    terminal_writestring("ac97: playing test tone via DMA...\n");
+    ac97_play_test_tone(f, 500);
+    terminal_writestring("ac97: done\n");
+}
+
 static void cmd_snake(void) {
     terminal_writestring("Snake: arrows/WASD, Q=quit\n");
     snake_run();
@@ -511,6 +532,9 @@ static void execute_command(const char* line) {
     else if (str_equals(line, "snake")) cmd_snake();
     else if (str_starts_with(line, "beep ")) cmd_beep(line + 5);
     else if (str_equals(line, "beep")) cmd_beep("");
+    else if (str_equals(line, "lspci")) cmd_lspci();
+    else if (str_starts_with(line, "beep97 ")) cmd_beep97(line + 7);
+    else if (str_equals(line, "beep97")) cmd_beep97("");
     else {
         terminal_writestring("Unknown: ");
         terminal_writestring(line);

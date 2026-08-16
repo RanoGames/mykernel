@@ -10,6 +10,7 @@
 #define PIT_BASE_HZ  1193182u
 
 static volatile uint32_t g_ticks;
+static uint32_t g_hz = 100;
 
 static void timer_callback(struct registers* regs) {
     (void)regs;
@@ -27,7 +28,23 @@ void timer_init(uint32_t hz) {
     outb(PIT_CHANNEL0, (uint8_t)((divisor >> 8) & 0xFF));
 
     g_ticks = 0;
+    g_hz = hz;
     irq_register_handler(0, timer_callback);
+}
+
+/* Блокирующая задержка в миллисекундах — крутимся (в hlt, чтобы не
+ * жечь CPU впустую), пока не наберётся нужное количество тиков.
+ * Годится только для коротких пауз при инициализации устройств
+ * (как в ac97.c) — для нормальной многозадачности такие блокирующие
+ * ожидания не подходят, там нужен sched_sleep() или аналог. */
+void timer_sleep_ms(uint32_t ms) {
+    uint32_t ticks_needed = (g_hz * ms) / 1000;
+    if (ticks_needed == 0)
+        ticks_needed = 1;
+    uint32_t target = g_ticks + ticks_needed;
+    while (g_ticks < target) {
+        __asm__ volatile ("hlt");
+    }
 }
 
 uint32_t timer_ticks(void) {

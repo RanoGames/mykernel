@@ -14,6 +14,8 @@
 #include "timer.h"
 #include "sched.h"
 #include "dyld.h"
+#include "pci.h"
+#include "ac97.h"
 #include "shell.h"
 
 void kernel_main(void) {
@@ -43,6 +45,11 @@ void kernel_main(void) {
         terminal_writestring("ATA: no disk\n");
 
     __asm__ volatile ("sti");
+
+    /* ac97_init() использует timer_sleep_ms() для пауз при сбросе
+     * чипа — это требует уже разрешённых прерываний (IRQ0 таймера),
+     * поэтому инициализируем звук именно после "sti", а не раньше */
+    ac97_init();
 
     terminal_writestring("Ready. Type 'snake' for game, 'help' for commands.\n");
     shell_run();

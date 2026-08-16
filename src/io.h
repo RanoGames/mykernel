@@ -25,6 +25,17 @@ static inline uint16_t inw(uint16_t port) {
     return ret;
 }
 
+/* 32-битные версии — нужны для PCI configuration space (порты 0xCF8/0xCFC) */
+static inline void outl(uint16_t port, uint32_t value) {
+    __asm__ volatile ("outl %0, %1" : : "a"(value), "Nd"(port));
+}
+
+static inline uint32_t inl(uint16_t port) {
+    uint32_t ret;
+    __asm__ volatile ("inl %1, %0" : "=a"(ret) : "Nd"(port));
+    return ret;
+}
+
 static inline void io_wait(void) {
     outb(0x80, 0);
 }
