@@ -21,8 +21,6 @@ enum elf_result {
     ELF_ERR_TOO_BIG,
 };
 
-/* Загружает ELF из буфера image (size байт) в физическую память
- * по адресам p_vaddr из заголовков. entry — виртуальный адрес точки входа. */
 enum elf_result elf_load(const uint8_t* image, size_t size, uint32_t* entry);
 
 const char* elf_strerror(enum elf_result r);

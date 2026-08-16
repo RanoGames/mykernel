@@ -92,10 +92,16 @@ enum elf_result elf_load(const uint8_t* image, size_t size, uint32_t* entry) {
         if (ph->p_offset + ph->p_filesz > size)
             return ELF_ERR_NO_LOAD;
 
-        /* Разрешаем загрузку только в окно ELF_LOAD_BASE .. + ELF_LOAD_MAX */
-        if (ph->p_vaddr < ELF_LOAD_BASE ||
-            ph->p_vaddr + ph->p_memsz > ELF_LOAD_BASE + ELF_LOAD_MAX)
-            return ELF_ERR_TOO_BIG;
+        /* Окно mykernel: 0x400000..+ELF_LOAD_MAX, либо классический Linux 0x08048000.. */
+        {
+            uint32_t vend = ph->p_vaddr + ph->p_memsz;
+            int ok_mk = (ph->p_vaddr >= ELF_LOAD_BASE &&
+                         vend <= ELF_LOAD_BASE + ELF_LOAD_MAX);
+            int ok_lx = (ph->p_vaddr >= ELF_LINUX_BASE &&
+                         vend <= ELF_LINUX_BASE + ELF_LINUX_MAX);
+            if (!ok_mk && !ok_lx)
+                return ELF_ERR_TOO_BIG;
+        }
 
         uint8_t* dest = (uint8_t*)(uintptr_t)ph->p_vaddr;
         mem_copy(dest, image + ph->p_offset, ph->p_filesz);
