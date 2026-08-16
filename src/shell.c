@@ -1,16 +1,4 @@
-/* shell.c — примитивная командная оболочка.
- *
- * Логика простая и типичная для учебных ОС:
- *   1. напечатать приглашение с текущим путём, например "/home> "
- *   2. читать символы с клавиатуры, пока не нажат Enter,
- *      одновременно отображая их на экране (эхо) и складывая в буфер строки
- *   3. сравнить введённую строку с известными командами
- *   4. выполнить соответствующее действие
- *   5. повторить
- *
- * Это специально написано без malloc/динамической памяти — вся
- * ОС пока не имеет менеджера памяти, поэтому буфер строки — обычный
- * массив на стеке фиксированного размера. */
+/* shell.c — командная оболочка с историей и редактированием строки. */
 
 #include "shell.h"
 #include "vga.h"
@@ -22,9 +10,38 @@
 
 #define CMD_BUFFER_SIZE 128
 #define PWD_BUFFER_SIZE 128
+#define HISTORY_SIZE    16
 
-/* Сравнение двух строк "вручную" — аналог strcmp из libc, но своя реализация,
- * т.к. мы собираем ядро без стандартной библиотеки C (-nostdlib/-ffreestanding) */
+static char history[HISTORY_SIZE][CMD_BUFFER_SIZE];
+static int history_count = 0;
+static int history_pos = 0;
+
+static void history_add(const char* line) {
+    if (line[0] == '\0')
+        return;
+
+    for (int i = HISTORY_SIZE - 1; i > 0; i--) {
+        size_t j = 0;
+        while (history[i - 1][j] && j < CMD_BUFFER_SIZE - 1) {
+            history[i][j] = history[i - 1][j];
+            j++;
+        }
+        history[i][j] = '\0';
+    }
+
+    size_t j = 0;
+    while (line[j] && j < CMD_BUFFER_SIZE - 1) {
+        history[0][j] = line[j];
+        j++;
+    }
+    history[0][j] = '\0';
+
+    if (history_count < HISTORY_SIZE)
+        history_count++;
+
+    history_pos = -1;
+}
+
 static int str_equals(const char* a, const char* b) {
     size_t i = 0;
     while (a[i] != '\0' && b[i] != '\0') {
@@ -32,11 +49,9 @@ static int str_equals(const char* a, const char* b) {
             return 0;
         i++;
     }
-    return a[i] == b[i]; /* оба должны закончиться одновременно */
+    return a[i] == b[i];
 }
 
-/* Проверка, начинается ли строка str с префикса prefix.
- * Нужна для команд с аргументами, например "echo привет мир" */
 static int str_starts_with(const char* str, const char* prefix) {
     size_t i = 0;
     while (prefix[i] != '\0') {
@@ -47,11 +62,21 @@ static int str_starts_with(const char* str, const char* prefix) {
     return 1;
 }
 
-/* Разбить строку "имя остаток текста" на первое "слово" (до пробела)
- * и всё, что после него. Используется командой write: "write file.txt Privet mir"
- * -> name_out = "file.txt", rest_out указывает на "Privet mir".
- * name_out должен быть буфером размера хотя бы FS_NAME_MAX. Возвращает
- * 0, если аргументов вообще не было (пустая строка). */
+static void str_copy(char* dst, const char* src, size_t max) {
+    size_t i = 0;
+    while (src[i] && i < max - 1) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = '\0';
+}
+
+static size_t str_len(const char* s) {
+    size_t n = 0;
+    while (s[n]) n++;
+    return n;
+}
+
 static int split_name_and_rest(const char* args, char* name_out, size_t name_out_size, const char** rest_out) {
     size_t i = 0;
     while (args[i] != '\0' && args[i] != ' ' && i < name_out_size - 1) {
@@ -66,39 +91,130 @@ static int split_name_and_rest(const char* args, char* name_out, size_t name_out
     }
 
     const char* rest = args + i;
-    while (*rest == ' ') rest++; /* пропускаем пробелы между именем и остальным текстом */
+    while (*rest == ' ') rest++;
     *rest_out = rest;
     return 1;
 }
 
-/* Читает одну строку ввода с клавиатуры в buffer (с эхом на экран
- * и поддержкой Backspace). Останавливается на Enter или при
- * заполнении буфера. Строка гарантированно завершается '\0'. */
 static void read_line(char* buffer, size_t max_len) {
     size_t len = 0;
+    size_t cursor = 0;
+    size_t prompt_x, prompt_y;
+
+    terminal_get_cursor(&prompt_x, &prompt_y);
+
+    buffer[0] = '\0';
+    history_pos = -1;
 
     for (;;) {
         char c = keyboard_getchar();
 
         if (c == KEY_ENTER) {
             terminal_putchar('\n');
+            buffer[len] = '\0';
             break;
-        } else if (c == KEY_BACKSPACE) {
-            if (len > 0) {
-                len--;
-                terminal_backspace();
-            }
-        } else if (len < max_len - 1) {
-            buffer[len++] = c;
-            terminal_putchar(c); /* эхо введённого символа на экран */
         }
-        /* если буфер уже полон — лишние символы молча игнорируем */
-    }
 
-    buffer[len] = '\0';
+        if (c == KEY_BACKSPACE) {
+            if (cursor > 0) {
+                for (size_t i = cursor - 1; i < len - 1; i++)
+                    buffer[i] = buffer[i + 1];
+                len--;
+                cursor--;
+                buffer[len] = '\0';
+
+                size_t y;
+                terminal_get_cursor(NULL, &y);
+                terminal_set_cursor(prompt_x + cursor, y);
+
+                for (size_t i = cursor; i < len; i++)
+                    terminal_putchar(buffer[i]);
+                terminal_putchar(' ');
+                terminal_set_cursor(prompt_x + cursor, y);
+            }
+            continue;
+        }
+
+        if (c == KEY_LEFT) {
+            if (cursor > 0) {
+                cursor--;
+                terminal_move_left(1);
+            }
+            continue;
+        }
+
+        if (c == KEY_RIGHT) {
+            if (cursor < len) {
+                cursor++;
+                terminal_move_right(1);
+            }
+            continue;
+        }
+
+        if (c == KEY_UP) {
+            if (history_count == 0)
+                continue;
+
+            if (history_pos < history_count - 1)
+                history_pos++;
+
+            size_t y;
+            terminal_get_cursor(NULL, &y);
+            terminal_set_cursor(prompt_x, y);
+            for (size_t i = 0; i < len; i++)
+                terminal_putchar(' ');
+            terminal_set_cursor(prompt_x, y);
+
+            str_copy(buffer, history[history_pos], max_len);
+            len = str_len(buffer);
+            cursor = len;
+            terminal_writestring(buffer);
+            continue;
+        }
+
+        if (c == KEY_DOWN) {
+            size_t y;
+            terminal_get_cursor(NULL, &y);
+            terminal_set_cursor(prompt_x, y);
+            for (size_t i = 0; i < len; i++)
+                terminal_putchar(' ');
+            terminal_set_cursor(prompt_x, y);
+
+            if (history_pos > 0) {
+                history_pos--;
+                str_copy(buffer, history[history_pos], max_len);
+                len = str_len(buffer);
+                cursor = len;
+                terminal_writestring(buffer);
+            } else {
+                history_pos = -1;
+                buffer[0] = '\0';
+                len = 0;
+                cursor = 0;
+            }
+            continue;
+        }
+
+        if (c >= 32 && c < 127 && len < max_len - 1) {
+            for (size_t i = len; i > cursor; i--)
+                buffer[i] = buffer[i - 1];
+            buffer[cursor] = c;
+            len++;
+            cursor++;
+            buffer[len] = '\0';
+
+            size_t y;
+            terminal_get_cursor(NULL, &y);
+            terminal_set_cursor(prompt_x + cursor - 1, y);
+
+            for (size_t i = cursor - 1; i < len; i++)
+                terminal_putchar(buffer[i]);
+
+            terminal_set_cursor(prompt_x + cursor, y);
+        }
+    }
 }
 
-/* Команда help — список доступных команд */
 static void cmd_help(void) {
     terminal_writestring("Available commands:\n");
     terminal_writestring("  help              - this help text\n");
@@ -117,43 +233,29 @@ static void cmd_help(void) {
     terminal_writestring("  write <file> <text> - write text to a file (creates it if missing)\n");
     terminal_writestring("  cat <file>        - show file contents\n");
     terminal_writestring("  rm <name>         - remove a file or an empty directory\n");
+    terminal_writestring("Line editing: Left/Right arrows, Up/Down = history\n");
 }
 
-/* Команда reboot — классический трюк через контроллер клавиатуры 8042:
- * запись команды 0xFE в его порт вызывает аппаратный сброс процессора.
- * Это не "чистый" способ, но самый простой и работающий почти везде
- * (включая настоящее старое/эмулируемое железо). */
 static void cmd_reboot(void) {
     terminal_writestring("Rebooting...\n");
     uint8_t good = 0x02;
-    /* ждём, пока входной буфер контроллера клавиатуры освободится */
     while (good & 0x02) {
         __asm__ volatile ("inb $0x64, %0" : "=a"(good));
     }
     __asm__ volatile ("outb %0, $0x64" : : "a"((uint8_t)0xFE));
-    for (;;) __asm__ volatile ("hlt"); /* если вдруг не сработало */
+    for (;;) __asm__ volatile ("hlt");
 }
 
-/* Команда shutdown — пытается выключить машину.
- * Работает в QEMU, Bochs и VirtualBox.
- * На реальном железе без поддержки ACPI просто останавливает процессор. */
 static void cmd_shutdown(void) {
     terminal_writestring("Shutting down...\n");
-
-    /* QEMU */
     __asm__ volatile ("outw %0, %1" : : "a"((uint16_t)0x2000), "Nd"((uint16_t)0x604));
-    /* Bochs / старые версии QEMU */
     __asm__ volatile ("outw %0, %1" : : "a"((uint16_t)0x2000), "Nd"((uint16_t)0xB004));
-    /* VirtualBox */
     __asm__ volatile ("outw %0, %1" : : "a"((uint16_t)0x3400), "Nd"((uint16_t)0x4004));
-
-    /* Если ничего не сработало — останавливаем процессор */
     for (;;) {
         __asm__ volatile ("cli; hlt");
     }
 }
 
-/* Команда calc — парсит и вычисляет выражение через модуль calc.c */
 static void cmd_calc(const char* expr) {
     if (expr[0] == '\0') {
         terminal_writestring("Usage: calc <expr>, e.g.: calc 2^8 + 3 * (4 - 1)\n");
@@ -172,7 +274,6 @@ static void cmd_calc(const char* expr) {
     terminal_putchar('\n');
 }
 
-/* Общий помощник: вывести код ошибки ФС в человекочитаемом виде */
 static void print_fs_error(enum fs_result err) {
     terminal_writestring("Error: ");
     terminal_writestring(fs_strerror(err));
@@ -256,10 +357,9 @@ static void cmd_write(const char* args) {
         print_fs_error(r);
 }
 
-/* Разбор и выполнение одной введённой команды */
 static void execute_command(const char* line) {
     if (line[0] == '\0') {
-        return; /* пустая строка — ничего не делаем */
+        return;
     } else if (str_equals(line, "help")) {
         cmd_help();
     } else if (str_equals(line, "clear")) {
@@ -309,12 +409,14 @@ void shell_run(void) {
     char path[PWD_BUFFER_SIZE];
 
     terminal_writestring("\nMyKernel shell. Type 'help' for the list of commands.\n");
+    terminal_writestring("Use Left/Right to move cursor, Up/Down for history.\n");
 
     for (;;) {
         fs_pwd(path, sizeof(path));
         terminal_writestring(path);
         terminal_writestring("> ");
         read_line(line, CMD_BUFFER_SIZE);
+        history_add(line);
         execute_command(line);
     }
 }
