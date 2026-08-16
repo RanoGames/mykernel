@@ -3,14 +3,12 @@ CROSS_CC := $(shell command -v i686-elf-gcc 2>/dev/null)
 ifeq ($(CROSS_CC),)
     CC = gcc
     EXTRA_ARCH_FLAGS = -m32
-    LD_ARCH_FLAGS = -m elf_i386
     AS = as
     AS_ARCH_FLAGS = --32
     OBJCOPY = objcopy
 else
     CC = i686-elf-gcc
     EXTRA_ARCH_FLAGS =
-    LD_ARCH_FLAGS =
     AS = i686-elf-as
     AS_ARCH_FLAGS =
     OBJCOPY = i686-elf-objcopy
@@ -25,7 +23,6 @@ ISO_DIR   = iso
 USER_DIR  = user
 
 CFLAGS = -std=gnu99 -ffreestanding -fno-stack-protector -fno-pic -fno-pie -Wall -Wextra -O2 $(EXTRA_ARCH_FLAGS) -I$(SRC_DIR)
-
 USER_CFLAGS = -std=gnu99 -ffreestanding -fno-stack-protector -fno-pic -fno-pie -Wall -Wextra -O2 $(EXTRA_ARCH_FLAGS) -I$(USER_DIR)/include
 
 ifeq ($(CROSS_CC),)
@@ -35,7 +32,7 @@ else
 endif
 
 ASM_SOURCES = boot.s gdt_flush.s idt_load.s isr.s
-C_SOURCES   = kernel.c gdt.c serial.c vga.c idt.c irq.c keyboard.c shell.c fs.c calc.c syscall.c elf.c process.c ata.c fat32.c kmalloc.c
+C_SOURCES   = kernel.c gdt.c serial.c vga.c idt.c irq.c keyboard.c shell.c fs.c calc.c syscall.c elf.c process.c ata.c fat32.c kmalloc.c mlang.c
 
 ASM_OBJECTS = $(ASM_SOURCES:%.s=$(BUILD_DIR)/%.o)
 C_OBJECTS   = $(C_SOURCES:%.c=$(BUILD_DIR)/%.o)
