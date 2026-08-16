@@ -1,30 +1,30 @@
-/* io.h — обёртки над инструкциями процессора in/out для работы с портами.
- * Порты ввода-вывода — это отдельное от обычной памяти адресное
- * пространство x86, через него общаются со "старым" железом:
- * PIC (контроллер прерываний), клавиатура, таймер и т.д. */
+/* io.h — in/out для портов x86 */
 
 #ifndef IO_H
 #define IO_H
 
 #include <stdint.h>
 
-/* Записать байт в порт */
 static inline void outb(uint16_t port, uint8_t value) {
-    /* asm volatile — говорим компилятору не оптимизировать/не убирать
-     * эту инструкцию, т.к. у неё есть побочный эффект на железо */
     __asm__ volatile ("outb %0, %1" : : "a"(value), "Nd"(port));
 }
 
-/* Прочитать байт из порта */
 static inline uint8_t inb(uint16_t port) {
     uint8_t ret;
     __asm__ volatile ("inb %1, %0" : "=a"(ret) : "Nd"(port));
     return ret;
 }
 
-/* Небольшая пауза — запись в неиспользуемый порт 0x80.
- * Старое железо иногда не успевает обработать команду мгновенно,
- * эта задержка "на глаз" используется по всему миру OS-разработки. */
+static inline void outw(uint16_t port, uint16_t value) {
+    __asm__ volatile ("outw %0, %1" : : "a"(value), "Nd"(port));
+}
+
+static inline uint16_t inw(uint16_t port) {
+    uint16_t ret;
+    __asm__ volatile ("inw %1, %0" : "=a"(ret) : "Nd"(port));
+    return ret;
+}
+
 static inline void io_wait(void) {
     outb(0x80, 0);
 }
