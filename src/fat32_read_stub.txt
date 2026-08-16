@@ -1,1 +1,0 @@
-If fat32_read_file is missing from fat32.c, add the function before fat_strerror. See settings.c which calls it.
