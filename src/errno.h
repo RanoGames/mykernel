@@ -1,4 +1,4 @@
-/* errno.h — коды ошибок в стиле Linux (для syscall return = -errno) */
+/* errno.h — коды ошибок в стиле Linux (syscall return = -errno) */
 #ifndef KERNEL_ERRNO_H
 #define KERNEL_ERRNO_H
 
@@ -25,6 +25,7 @@
 #define ENFILE      23
 #define EMFILE      24
 #define ENOSPC      28
+#define ESPIPE      29
 #define EPIPE       32
 #define ERANGE      34
 #define ENOSYS      38
