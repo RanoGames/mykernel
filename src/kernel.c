@@ -8,6 +8,7 @@
 #include "keyboard.h"
 #include "fs.h"
 #include "ata.h"
+#include "kmalloc.h"
 #include "shell.h"
 
 void kernel_main(void) {
@@ -17,6 +18,8 @@ void kernel_main(void) {
     terminal_initialize();
     terminal_writestring("Hello, World!\n");
     terminal_writestring("Booting kernel subsystems...\n");
+
+    kmalloc_init();
 
     idt_init();
     isr_install();
