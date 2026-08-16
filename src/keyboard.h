@@ -5,16 +5,13 @@
 
 void keyboard_init(void);
 
-/* Блокирующее чтение одного символа: ждёт, пока пользователь не
- * нажмёт клавишу (PS/2 или serial при -nographic). Возвращает ASCII
- * или специальные коды ниже. */
 char keyboard_getchar(void);
 
-/* Специальные "символы", которые может вернуть keyboard_getchar() */
+/* Неблокирующее чтение: 1 и *out=символ, 0 если пусто */
+int keyboard_trygetchar(char* out);
+
 #define KEY_BACKSPACE '\b'
 #define KEY_ENTER     '\n'
-
-/* Коды стрелок (значения вне обычного ASCII) */
 #define KEY_UP        ((char)0x11)
 #define KEY_DOWN      ((char)0x12)
 #define KEY_LEFT      ((char)0x13)
