@@ -33,18 +33,17 @@ else
 endif
 
 ASM_SOURCES = boot.s gdt_flush.s idt_load.s isr.s
-C_SOURCES   = kernel.c gdt.c serial.c vga.c idt.c irq.c keyboard.c shell.c fs.c calc.c syscall.c elf.c process.c
+C_SOURCES   = kernel.c gdt.c serial.c vga.c idt.c irq.c keyboard.c shell.c fs.c calc.c syscall.c elf.c process.c ata.c fat32.c
 
 ASM_OBJECTS = $(ASM_SOURCES:%.s=$(BUILD_DIR)/%.o)
 C_OBJECTS   = $(C_SOURCES:%.c=$(BUILD_DIR)/%.o)
 
-# Встроенный userspace ELF
 USER_ELF    = $(BUILD_DIR)/hello.elf
 USER_BLOB   = $(BUILD_DIR)/hello_blob.o
 
 OBJECTS = $(BUILD_DIR)/boot.o $(filter-out $(BUILD_DIR)/boot.o,$(ASM_OBJECTS)) $(C_OBJECTS) $(USER_BLOB)
 
-.PHONY: all clean run run-iso run-nographic iso user
+.PHONY: all clean run run-iso run-nographic run-fat iso user fat-image
 
 all: $(BUILD_DIR)/mykernel.bin
 
@@ -57,13 +56,11 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.s | $(BUILD_DIR)
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(wildcard $(SRC_DIR)/*.h) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# --- Userspace program ---
 user: $(USER_ELF)
 
 $(USER_ELF): $(USER_DIR)/hello.c $(USER_DIR)/linker.ld | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -T $(USER_DIR)/linker.ld -nostdlib -Wl,--build-id=none -o $@ $(USER_DIR)/hello.c
 
-# Превращаем ELF в объектник с символами _binary_build_hello_elf_*
 $(USER_BLOB): $(USER_ELF)
 	$(OBJCOPY) -O elf32-i386 -B i386 -I binary $< $@
 
@@ -76,11 +73,30 @@ iso: $(BUILD_DIR)/mykernel.bin
 	cp $(SRC_DIR)/grub.cfg $(ISO_DIR)/boot/grub/grub.cfg
 	grub-mkrescue -o $(BUILD_DIR)/mykernel.iso $(ISO_DIR)
 
+# Образ FAT32 для тестов (нужны dosfstools: mkfs.vfat)
+fat-image:
+	dd if=/dev/zero of=fat.img bs=1M count=32 status=none
+	mkfs.vfat -F 32 fat.img
+	mkdir -p fatmnt
+	sudo mount -o loop fat.img fatmnt
+	echo "Hello from FAT32" | sudo tee fatmnt/HELLO.TXT > /dev/null
+	echo "MyKernel test file" | sudo tee fatmnt/TEST.TXT > /dev/null
+	sudo mkdir -p fatmnt/DOCS
+	echo "docs ok" | sudo tee fatmnt/DOCS/README.TXT > /dev/null
+	sudo umount fatmnt
+	rmdir fatmnt
+	@echo "Created fat.img — run: make run-fat"
+
 run: $(BUILD_DIR)/mykernel.bin
 	qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin
 
 run-nographic: $(BUILD_DIR)/mykernel.bin
 	qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin -nographic
+
+# Ядро + диск FAT32 (IDE)
+run-fat: $(BUILD_DIR)/mykernel.bin
+	@test -f fat.img || (echo "No fat.img — run: make fat-image"; exit 1)
+	qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin -drive file=fat.img,format=raw,if=ide
 
 run-iso: iso
 	qemu-system-i386 -cdrom $(BUILD_DIR)/mykernel.iso
