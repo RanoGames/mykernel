@@ -1,4 +1,4 @@
-/* vga.h — интерфейс простого "терминала" на текстовом VGA-экране. */
+/* vga.h — text terminal: VGA 80x25 or VBE framebuffer console */
 
 #ifndef VGA_H
 #define VGA_H
@@ -34,7 +34,6 @@ void terminal_backspace(void);
 void terminal_hide_cursor(void);
 void terminal_show_cursor(void);
 
-/* Управление позицией курсора (для редактирования строки в shell) */
 void terminal_get_cursor(size_t* x, size_t* y);
 void terminal_set_cursor(size_t x, size_t y);
 void terminal_move_left(size_t n);
@@ -44,5 +43,12 @@ void terminal_putchar_at_cursor(char c);
 void terminal_write_uint(uint32_t value);
 void terminal_write_int(int32_t value);
 void terminal_write_hex(uint32_t value);
+
+/* Framebuffer console (VBE) — system-wide resolution */
+int terminal_enable_fb(int vbe_mode_id);
+void terminal_disable_fb(void);
+int terminal_fb_active(void);
+size_t terminal_cols(void);
+size_t terminal_rows(void);
 
 #endif
