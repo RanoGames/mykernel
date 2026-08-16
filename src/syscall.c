@@ -61,25 +61,7 @@ struct fd_entry {
 
 static struct fd_entry fds[FD_MAX];
 static uint32_t user_brk = USER_HEAP_BASE;
-static uint32_t g_kernel_esp;
-static void* g_kernel_cont;
-static int g_exit_code;
 static uint32_t g_boot_epoch = 1700000000u;
-
-void process_save_kernel_context(uint32_t esp, void* cont) {
-    g_kernel_esp = esp;
-    g_kernel_cont = cont;
-}
-
-int process_last_exit_code(void) { return g_exit_code; }
-
-void process_exit_to_kernel(int code) {
-    g_exit_code = code;
-    uint32_t esp = g_kernel_esp;
-    void* cont = g_kernel_cont;
-    __asm__ volatile("mov %0, %%esp\njmp *%1\n" : : "r"(esp), "r"(cont) : "memory");
-    for (;;) __asm__ volatile ("hlt");
-}
 
 void user_heap_reset(void) { user_brk = USER_HEAP_BASE; }
 

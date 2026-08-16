@@ -20,6 +20,7 @@ static int screen_w, screen_h;
 static int sx[MAX_LEN], sy[MAX_LEN];
 static int slen;
 static int dir_x, dir_y;
+static int next_dx, next_dy;   /* pending turn — applied once per step */
 static int food_x, food_y;
 static int score;
 static int dead;
@@ -89,6 +90,66 @@ static void draw_cell(int gx, int gy, int kind) {
     }
 }
 
+/* 8x8-ish overlay text via gfx_font_glyph (16 rows, we use top 8 or full) */
+static void draw_text_xy(int px, int py, const char* s, uint32_t fg32, uint8_t fg8) {
+    for (; *s; s++) {
+        const uint8_t* g = gfx_font_glyph((unsigned char)*s);
+        for (int row = 0; row < 16; row++) {
+            uint8_t bits = g[row];
+            for (int col = 0; col < 8; col++) {
+                if (bits & (0x80 >> col)) {
+                    if (use_vbe)
+                        vbe_putpixel(px + col, py + row, fg32);
+                    else
+                        gfx_putpixel(px + col, py + row, fg8);
+                }
+            }
+        }
+        px += 8;
+    }
+}
+
+static void draw_game_over(void) {
+    /* red panel in the center */
+    int box_w = use_vbe ? (screen_w / 2) : 200;
+    int box_h = use_vbe ? 80 : 60;
+    int bx = (screen_w - box_w) / 2;
+    int by = (screen_h - box_h) / 2;
+
+    if (use_vbe) {
+        vbe_fill_rect(bx, by, box_w, box_h, vbe_rgb(160, 0, 0));
+        vbe_fill_rect(bx + 2, by + 2, box_w - 4, box_h - 4, vbe_rgb(40, 0, 0));
+        draw_text_xy(bx + 16, by + 16, "GAME OVER", vbe_rgb(255, 220, 220), 0);
+        /* score */
+        char sc[24];
+        int n = 0;
+        sc[n++] = 'S'; sc[n++] = 'c'; sc[n++] = 'o'; sc[n++] = 'r'; sc[n++] = 'e'; sc[n++] = ':'; sc[n++] = ' ';
+        int v = score;
+        char tmp[12]; int ti = 0;
+        if (v == 0) tmp[ti++] = '0';
+        while (v > 0 && ti < 11) { tmp[ti++] = (char)('0' + (v % 10)); v /= 10; }
+        while (ti--) sc[n++] = tmp[ti];
+        sc[n] = 0;
+        draw_text_xy(bx + 16, by + 40, sc, vbe_rgb(255, 255, 100), 0);
+        draw_text_xy(bx + 16, by + 58, "R=retry  Esc=quit", vbe_rgb(200, 200, 200), 0);
+    } else {
+        gfx_fill_rect(bx, by, box_w, box_h, GFX_RED);
+        gfx_fill_rect(bx + 2, by + 2, box_w - 4, box_h - 4, GFX_DGRAY);
+        draw_text_xy(bx + 12, by + 12, "GAME OVER", 0, GFX_WHITE);
+        char sc[24];
+        int n = 0;
+        sc[n++] = 'S'; sc[n++] = 'c'; sc[n++] = 'o'; sc[n++] = 'r'; sc[n++] = 'e'; sc[n++] = ':'; sc[n++] = ' ';
+        int v = score;
+        char tmp[12]; int ti = 0;
+        if (v == 0) tmp[ti++] = '0';
+        while (v > 0 && ti < 11) { tmp[ti++] = (char)('0' + (v % 10)); v /= 10; }
+        while (ti--) sc[n++] = tmp[ti];
+        sc[n] = 0;
+        draw_text_xy(bx + 12, by + 32, sc, 0, GFX_YELLOW);
+        draw_text_xy(bx + 12, by + 44, "R=retry Esc=quit", 0, GFX_LGRAY);
+    }
+}
+
 static void redraw_full(void) {
     if (!use_vbe) gfx_wait_vsync();
     clear_screen();
@@ -96,6 +157,8 @@ static void redraw_full(void) {
     draw_cell(food_x, food_y, 3);
     for (int i = 0; i < slen; i++)
         draw_cell(sx[i], sy[i], i == 0 ? 1 : 2);
+    if (dead)
+        draw_game_over();
 }
 
 static void redraw_step(void) {
@@ -109,6 +172,16 @@ static void redraw_step(void) {
 
 static void step(void) {
     if (dead) return;
+
+    /* apply pending direction once per tick (fixes double-key ignore) */
+    if (!(next_dx == -dir_x && next_dy == -dir_y)) {
+        /* only reject exact reverse; allow any other pending */
+        if (next_dx != dir_x || next_dy != dir_y) {
+            dir_x = next_dx;
+            dir_y = next_dy;
+        }
+    }
+
     int nx = sx[0] + dir_x;
     int ny = sy[0] + dir_y;
     if (nx < 0 || ny < 0 || nx >= grid_w || ny >= grid_h) { dead = 1; return; }
@@ -138,14 +211,22 @@ static void step(void) {
 }
 
 static void handle_key(char c) {
+    int ndx = next_dx, ndy = next_dy;
     if (c == 'w' || c == 'W' || c == KEY_UP) {
-        if (dir_y != 1) { dir_x = 0; dir_y = -1; }
+        ndx = 0; ndy = -1;
     } else if (c == 's' || c == 'S' || c == KEY_DOWN) {
-        if (dir_y != -1) { dir_x = 0; dir_y = 1; }
+        ndx = 0; ndy = 1;
     } else if (c == 'a' || c == 'A' || c == KEY_LEFT) {
-        if (dir_x != 1) { dir_x = -1; dir_y = 0; }
+        ndx = -1; ndy = 0;
     } else if (c == 'd' || c == 'D' || c == KEY_RIGHT) {
-        if (dir_x != -1) { dir_x = 1; dir_y = 0; }
+        ndx = 1; ndy = 0;
+    } else {
+        return;
+    }
+    /* queue if not exact reverse of *current* movement */
+    if (!(ndx == -dir_x && ndy == -dir_y)) {
+        next_dx = ndx;
+        next_dy = ndy;
     }
 }
 
@@ -182,12 +263,15 @@ void snake_run(void) {
     sx[1] = sx[0] - 1; sy[1] = sy[0];
     sx[2] = sx[0] - 2; sy[2] = sy[0];
     dir_x = 1; dir_y = 0;
+    next_dx = 1; next_dy = 0;
     score = 0; dead = 0; death_sounded = 0;
     place_food();
     redraw_full();
 
     uint32_t last = timer_ticks();
-    uint32_t period = use_vbe ? 6 : 5;
+    /* ~8 moves/sec: period from timer_hz (ms → ticks) */
+    uint32_t period = (timer_hz() * 120) / 1000; /* 120 ms between steps */
+    if (period < 1) period = 1;
 
     for (;;) {
         char c;
@@ -199,6 +283,7 @@ void snake_run(void) {
                 sx[1] = sx[0] - 1; sy[1] = sy[0];
                 sx[2] = sx[0] - 2; sy[2] = sy[0];
                 dir_x = 1; dir_y = 0;
+                next_dx = 1; next_dy = 0;
                 score = 0; dead = 0; death_sounded = 0;
                 place_food();
                 redraw_full();

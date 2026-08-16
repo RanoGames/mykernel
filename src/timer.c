@@ -18,10 +18,10 @@ static void timer_callback(struct registers* regs) {
     sched_on_tick();
 }
 
-/* hz: typically 100 (10 ms/tick) or 1000 (1 ms). 0 -> 100. */
+/* hz: типично 100 (10 ms/тик) или 1000 (1 ms). 0 → 100. */
 void timer_init(uint32_t hz) {
     if (hz == 0) hz = 100;
-    if (hz > 1000) hz = 1000;
+    if (hz > 1000) hz = 1000; /* не гоняем PIT слишком часто */
 
     uint32_t divisor = PIT_BASE_HZ / hz;
     if (divisor < 1) divisor = 1;

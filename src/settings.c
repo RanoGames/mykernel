@@ -127,7 +127,7 @@ static void show_status(void) {
     terminal_writestring(g_cfg.sound_enabled ? "on\n" : "off\n");
     terminal_writestring("  gfx:   ");
     print_mode_name(g_cfg.gfx_mode);
-    terminal_writestring(g_cfg.gfx_use_vbe ? " (VBE)\n" : " (mode13 prefer)\n");
+    terminal_writestring(g_cfg.gfx_use_vbe ? " (VBE)\n" : " (Mode13 prefer)\n");
 }
 
 void settings_menu(void) {
@@ -135,11 +135,11 @@ void settings_menu(void) {
     show_status();
     terminal_writestring(
         "  1) Toggle sound\n"
-        "  2) Resolution: 640x480\n"
-        "  3) Resolution: 800x600\n"
-        "  4) Resolution: 1024x768\n"
-        "  5) Prefer VBE for graphics\n"
-        "  6) Prefer Mode13 (320x200)\n"
+        "  2) System res: 640x480 (VBE console)\n"
+        "  3) System res: 800x600 (VBE console)\n"
+        "  4) System res: 1024x768 (VBE console)\n"
+        "  5) Prefer VBE + enable FB console\n"
+        "  6) Prefer Mode13 + text 80x25\n"
         "  7) Test VBE now (demo)\n"
         "  8) Save to FAT (SETTINGS.CFG)\n"
         "  9) Load from FAT\n"
@@ -162,19 +162,35 @@ void settings_menu(void) {
             if (g_cfg.sound_enabled) sound_beep_ok();
         } else if (c == '2') {
             g_cfg.gfx_mode = 0;
-            terminal_writestring("gfx_mode=640x480\n");
+            g_cfg.gfx_use_vbe = 1;
+            if (terminal_enable_fb(0) == 0)
+                terminal_writestring("system console: 640x480 VBE\n");
+            else
+                terminal_writestring("gfx_mode=640x480 (VBE failed)\n");
         } else if (c == '3') {
             g_cfg.gfx_mode = 1;
-            terminal_writestring("gfx_mode=800x600\n");
+            g_cfg.gfx_use_vbe = 1;
+            if (terminal_enable_fb(1) == 0)
+                terminal_writestring("system console: 800x600 VBE\n");
+            else
+                terminal_writestring("gfx_mode=800x600 (VBE failed)\n");
         } else if (c == '4') {
             g_cfg.gfx_mode = 2;
-            terminal_writestring("gfx_mode=1024x768\n");
+            g_cfg.gfx_use_vbe = 1;
+            if (terminal_enable_fb(2) == 0)
+                terminal_writestring("system console: 1024x768 VBE\n");
+            else
+                terminal_writestring("gfx_mode=1024x768 (VBE failed)\n");
         } else if (c == '5') {
             g_cfg.gfx_use_vbe = 1;
-            terminal_writestring("prefer VBE\n");
+            if (terminal_enable_fb(g_cfg.gfx_mode) == 0)
+                terminal_writestring("prefer VBE + FB console on\n");
+            else
+                terminal_writestring("prefer VBE (FB failed)\n");
         } else if (c == '6') {
             g_cfg.gfx_use_vbe = 0;
-            terminal_writestring("prefer Mode13\n");
+            terminal_disable_fb();
+            terminal_writestring("prefer Mode13, text console restored\n");
         } else if (c == '7') {
             vbe_demo();
         } else if (c == '8') {

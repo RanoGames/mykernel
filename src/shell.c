@@ -18,6 +18,7 @@
 #include "settings.h"
 #include "vbe.h"
 #include "pong.h"
+#include "desktop.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -159,6 +160,84 @@ static void read_line(char* buffer, size_t max_len) {
             }
             continue;
         }
+        if (c == '\t') {
+            /* Tab-completion: commands + names in cwd */
+            static const char* cmds[] = {
+                "help","clear","echo","about","uname","whoami","free","history",
+                "reboot","shutdown","calc","ls","pwd","cd","mkdir","touch","cat",
+                "rm","write","append","cp","mv","fatmount","fatinfo","fatls","fatcat",
+                "fatwrite","lang","ps","spawn","snake","pong","beep","lspci","beep97",
+                "exec","settings","vbetest","dynhello","desktop",0
+            };
+            size_t tok_start = cursor;
+            while (tok_start > 0 && buffer[tok_start - 1] != ' ') tok_start--;
+            char prefix[64];
+            size_t plen = cursor - tok_start;
+            if (plen >= sizeof(prefix)) plen = sizeof(prefix) - 1;
+            for (size_t i = 0; i < plen; i++) prefix[i] = buffer[tok_start + i];
+            prefix[plen] = '\0';
+
+            char matches[64][FS_NAME_MAX];
+            int nmatch = 0;
+
+            if (tok_start == 0) {
+                for (int i = 0; cmds[i] && nmatch < 64; i++) {
+                    size_t j = 0;
+                    while (prefix[j] && cmds[i][j] && prefix[j] == cmds[i][j]) j++;
+                    if (prefix[j] == '\0') {
+                        size_t k = 0;
+                        while (cmds[i][k] && k < FS_NAME_MAX - 1) {
+                            matches[nmatch][k] = cmds[i][k]; k++;
+                        }
+                        matches[nmatch][k] = '\0';
+                        nmatch++;
+                    }
+                }
+            }
+            for (int idx = 0; nmatch < 64; idx++) {
+                char name[FS_NAME_MAX];
+                int is_dir = 0;
+                if (fs_cwd_entry(idx, name, sizeof(name), &is_dir) != 0) break;
+                size_t j = 0;
+                while (prefix[j] && name[j] && prefix[j] == name[j]) j++;
+                if (prefix[j] == '\0') {
+                    size_t k = 0;
+                    while (name[k] && k < FS_NAME_MAX - 2) {
+                        matches[nmatch][k] = name[k]; k++;
+                    }
+                    if (is_dir) matches[nmatch][k++] = '/';
+                    matches[nmatch][k] = '\0';
+                    nmatch++;
+                }
+            }
+
+            if (nmatch == 1) {
+                const char* m = matches[0];
+                size_t ml = 0; while (m[ml]) ml++;
+                size_t need = ml - plen;
+                if (len + need < max_len - 1) {
+                    for (size_t i = len; i > cursor; i--) buffer[i + need] = buffer[i - 1];
+                    for (size_t i = 0; i < need; i++) buffer[cursor + i] = m[plen + i];
+                    len += need; cursor += need; buffer[len] = '\0';
+                    size_t y; terminal_get_cursor(NULL, &y);
+                    terminal_set_cursor(prompt_x + tok_start, y);
+                    for (size_t i = tok_start; i < len; i++) terminal_putchar(buffer[i]);
+                    terminal_set_cursor(prompt_x + cursor, y);
+                }
+            } else if (nmatch > 1) {
+                terminal_putchar('\n');
+                for (int i = 0; i < nmatch; i++) {
+                    terminal_writestring(matches[i]);
+                    terminal_putchar(' ');
+                }
+                terminal_putchar('\n');
+                terminal_writestring("> ");
+                terminal_get_cursor(&prompt_x, &prompt_y);
+                terminal_writestring(buffer);
+                terminal_set_cursor(prompt_x + cursor, prompt_y);
+            }
+            continue;
+        }
         if (c >= 32 && c < 127 && len < max_len - 1) {
             for (size_t i = len; i > cursor; i--) buffer[i] = buffer[i - 1];
             buffer[cursor] = c; len++; cursor++; buffer[len] = '\0';
@@ -190,6 +269,7 @@ static void cmd_help(void) {
     terminal_writestring("Lang:   lang | lang <file>\n");
     terminal_writestring("Tasks:  ps  spawn\n");
     terminal_writestring("Games:  snake  pong  beep [freq|err|coin]\n");
+    terminal_writestring("GUI:    desktop\n");
     terminal_writestring("PCI:    lspci  beep97 [freq]\n");
     terminal_writestring("Programs: exec hello | exec dynhello\n");
     terminal_writestring("Config: settings  vbetest\n");
@@ -447,6 +527,8 @@ static void cmd_spawn(void) {
 static void cmd_settings(void) { settings_menu(); }
 static void cmd_vbetest(void) { vbe_probe(); vbe_demo(); }
 
+static void cmd_desktop(void) { desktop_run(); }
+
 static void cmd_lang(const char* arg) {
     if (arg[0] != '\0') {
         const char* content; size_t len;
@@ -548,6 +630,7 @@ static void execute_command(const char* line) {
     else if (str_equals(line, "beep97")) cmd_beep97("");
     else if (str_equals(line, "settings")) cmd_settings();
     else if (str_equals(line, "vbetest")) cmd_vbetest();
+    else if (str_equals(line, "desktop")) cmd_desktop();
     else {
         terminal_writestring("Unknown: ");
         terminal_writestring(line);
@@ -558,7 +641,7 @@ static void execute_command(const char* line) {
 void shell_run(void) {
     char line[CMD_BUFFER_SIZE];
     char path[PWD_BUFFER_SIZE];
-    terminal_writestring("\nMyKernel. help | settings | vbetest | snake | pong\n");
+    terminal_writestring("\nMyKernel. help | settings | desktop | snake | pong\n");
     for (;;) {
         fs_pwd(path, sizeof(path));
         terminal_writestring(path);

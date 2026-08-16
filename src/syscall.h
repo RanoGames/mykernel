@@ -69,7 +69,7 @@
 #define SEEK_END 2
 
 void syscall_handler(struct registers* regs);
-void process_save_kernel_context(uint32_t esp, void* cont);
+void process_save_kernel_context(uint32_t esp, uint32_t ebp, void* cont);
 void process_exit_to_kernel(int code);
 int process_last_exit_code(void);
 void user_heap_reset(void);

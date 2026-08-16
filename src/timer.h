@@ -5,7 +5,7 @@
 
 #include <stdint.h>
 
-/* PIT init. hz usually 100 (tick = 10 ms). */
+/* Инициализация PIT. hz обычно 100 (тик = 10 мс). */
 void timer_init(uint32_t hz);
 
 uint32_t timer_ticks(void);
