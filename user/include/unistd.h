@@ -12,6 +12,7 @@
 #define __NR_exit  1
 #define __NR_read  3
 #define __NR_write 4
+#define __NR_brk   45
 
 static inline int __syscall3(int n, int a, int b, int c) {
     int ret;
