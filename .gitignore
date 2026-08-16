@@ -31,3 +31,4 @@ iso/boot/grub/grub.cfg
 Thumbs.db
 .DS_Store
 desktop.ini
+fat.img
