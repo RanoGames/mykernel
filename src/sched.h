@@ -23,7 +23,7 @@ struct task {
     int id;
     enum task_state state;
     char name[16];
-    uint32_t* sp;           /* saved stack pointer */
+    uint32_t* sp;
     uint8_t* stack_base;
     task_entry_t entry;
     void* arg;
@@ -33,11 +33,15 @@ struct task {
 void sched_init(void);
 int  sched_spawn(const char* name, task_entry_t entry, void* arg);
 void sched_yield(void);
-void sched_on_tick(void);   /* из IRQ0 */
+void sched_on_tick(void);
 void sched_exit(void);
 
 struct task* sched_current(void);
 int  sched_task_count(void);
-void sched_list(void);      /* печать для shell ps */
+void sched_list(void);
+
+/* демо-воркер (счётчик в фоне) */
+int  sched_spawn_worker(void);
+uint32_t sched_worker_counter(void);
 
 #endif
