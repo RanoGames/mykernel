@@ -9,6 +9,7 @@
 #include "fs.h"
 #include "ata.h"
 #include "kmalloc.h"
+#include "syscall.h"
 #include "shell.h"
 
 void kernel_main(void) {
@@ -20,6 +21,7 @@ void kernel_main(void) {
     terminal_writestring("Booting kernel subsystems...\n");
 
     kmalloc_init();
+    fd_table_reset();
 
     idt_init();
     isr_install();
