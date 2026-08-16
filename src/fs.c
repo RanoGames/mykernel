@@ -1,4 +1,4 @@
-/* fs.c — реализация RAM-файловой системы. */
+/* fs.c — RAM-файловая система. */
 
 #include "fs.h"
 #include "vga.h"
@@ -55,15 +55,13 @@ void fs_init(void) {
     nodes[FS_ROOT_INDEX].type = FS_TYPE_DIR;
     k_strcpy_truncate(nodes[FS_ROOT_INDEX].name, "/", FS_NAME_MAX);
     nodes[FS_ROOT_INDEX].parent = -1;
-
     cwd = FS_ROOT_INDEX;
 }
 
 static int fs_alloc_node(void) {
-    for (int i = 0; i < FS_MAX_NODES; i++) {
+    for (int i = 0; i < FS_MAX_NODES; i++)
         if (nodes[i].type == FS_TYPE_FREE)
             return i;
-    }
     return -1;
 }
 
@@ -71,33 +69,24 @@ static int fs_find_child(int parent_idx, const char* name) {
     for (int i = 0; i < FS_MAX_NODES; i++) {
         if (nodes[i].type != FS_TYPE_FREE &&
             nodes[i].parent == parent_idx &&
-            k_streq(nodes[i].name, name)) {
+            k_streq(nodes[i].name, name))
             return i;
-        }
     }
     return -1;
 }
 
 static int fs_is_valid_name(const char* name) {
-    if (name[0] == '\0')
-        return 0;
-    if (k_streq(name, ".") || k_streq(name, ".."))
-        return 0;
-    if (k_strlen(name) >= FS_NAME_MAX)
-        return 0;
+    if (name[0] == '\0') return 0;
+    if (k_streq(name, ".") || k_streq(name, "..")) return 0;
+    if (k_strlen(name) >= FS_NAME_MAX) return 0;
     return 1;
 }
 
 enum fs_result fs_mkdir(const char* name) {
-    if (!fs_is_valid_name(name))
-        return FS_ERR_INVALID_NAME;
-    if (fs_find_child(cwd, name) != -1)
-        return FS_ERR_ALREADY_EXISTS;
-
+    if (!fs_is_valid_name(name)) return FS_ERR_INVALID_NAME;
+    if (fs_find_child(cwd, name) != -1) return FS_ERR_ALREADY_EXISTS;
     int idx = fs_alloc_node();
-    if (idx == -1)
-        return FS_ERR_NO_SPACE;
-
+    if (idx == -1) return FS_ERR_NO_SPACE;
     nodes[idx].type = FS_TYPE_DIR;
     k_strcpy_truncate(nodes[idx].name, name, FS_NAME_MAX);
     nodes[idx].parent = cwd;
@@ -105,15 +94,10 @@ enum fs_result fs_mkdir(const char* name) {
 }
 
 enum fs_result fs_touch(const char* name) {
-    if (!fs_is_valid_name(name))
-        return FS_ERR_INVALID_NAME;
-    if (fs_find_child(cwd, name) != -1)
-        return FS_ERR_ALREADY_EXISTS;
-
+    if (!fs_is_valid_name(name)) return FS_ERR_INVALID_NAME;
+    if (fs_find_child(cwd, name) != -1) return FS_ERR_ALREADY_EXISTS;
     int idx = fs_alloc_node();
-    if (idx == -1)
-        return FS_ERR_NO_SPACE;
-
+    if (idx == -1) return FS_ERR_NO_SPACE;
     nodes[idx].type = FS_TYPE_FILE;
     k_strcpy_truncate(nodes[idx].name, name, FS_NAME_MAX);
     nodes[idx].parent = cwd;
@@ -123,71 +107,125 @@ enum fs_result fs_touch(const char* name) {
 }
 
 enum fs_result fs_cd(const char* name) {
-    if (k_streq(name, ".")) {
-        return FS_OK;
-    } else if (k_streq(name, "..")) {
+    if (k_streq(name, ".")) return FS_OK;
+    if (k_streq(name, "..")) {
         if (nodes[cwd].parent != -1)
             cwd = nodes[cwd].parent;
         return FS_OK;
-    } else if (k_streq(name, "/")) {
+    }
+    if (k_streq(name, "/")) {
         cwd = FS_ROOT_INDEX;
         return FS_OK;
     }
-
     int idx = fs_find_child(cwd, name);
-    if (idx == -1)
-        return FS_ERR_NOT_FOUND;
-    if (nodes[idx].type != FS_TYPE_DIR)
-        return FS_ERR_NOT_A_DIRECTORY;
-
+    if (idx == -1) return FS_ERR_NOT_FOUND;
+    if (nodes[idx].type != FS_TYPE_DIR) return FS_ERR_NOT_A_DIRECTORY;
     cwd = idx;
     return FS_OK;
 }
 
 enum fs_result fs_rm(const char* name) {
     int idx = fs_find_child(cwd, name);
-    if (idx == -1)
-        return FS_ERR_NOT_FOUND;
-
+    if (idx == -1) return FS_ERR_NOT_FOUND;
     if (nodes[idx].type == FS_TYPE_DIR) {
-        for (int i = 0; i < FS_MAX_NODES; i++) {
+        for (int i = 0; i < FS_MAX_NODES; i++)
             if (nodes[i].type != FS_TYPE_FREE && nodes[i].parent == idx)
                 return FS_ERR_DIR_NOT_EMPTY;
-        }
     }
-
     nodes[idx].type = FS_TYPE_FREE;
     return FS_OK;
 }
 
 enum fs_result fs_write(const char* name, const char* text) {
     int idx = fs_find_child(cwd, name);
-
     if (idx == -1) {
         enum fs_result r = fs_touch(name);
-        if (r != FS_OK)
-            return r;
+        if (r != FS_OK) return r;
         idx = fs_find_child(cwd, name);
     }
-
-    if (nodes[idx].type != FS_TYPE_FILE)
-        return FS_ERR_IS_A_DIRECTORY;
-
+    if (nodes[idx].type != FS_TYPE_FILE) return FS_ERR_IS_A_DIRECTORY;
     k_strcpy_truncate(nodes[idx].content, text, FS_FILE_MAX);
     nodes[idx].content_len = k_strlen(nodes[idx].content);
     return FS_OK;
 }
 
+enum fs_result fs_append(const char* name, const char* text) {
+    int idx = fs_find_child(cwd, name);
+    if (idx == -1) {
+        enum fs_result r = fs_touch(name);
+        if (r != FS_OK) return r;
+        idx = fs_find_child(cwd, name);
+    }
+    if (nodes[idx].type != FS_TYPE_FILE) return FS_ERR_IS_A_DIRECTORY;
+
+    size_t tlen = k_strlen(text);
+    size_t pos = nodes[idx].content_len;
+    /* добавим перевод строки перед новой порцией, если файл не пуст */
+    if (pos > 0 && pos + 1 < FS_FILE_MAX) {
+        nodes[idx].content[pos++] = '\n';
+    }
+    size_t i = 0;
+    while (text[i] && pos + 1 < FS_FILE_MAX) {
+        nodes[idx].content[pos++] = text[i++];
+    }
+    nodes[idx].content[pos] = '\0';
+    nodes[idx].content_len = pos;
+    (void)tlen;
+    return FS_OK;
+}
+
 enum fs_result fs_read(const char* name, const char** out_content, size_t* out_len) {
     int idx = fs_find_child(cwd, name);
-    if (idx == -1)
-        return FS_ERR_NOT_FOUND;
-    if (nodes[idx].type != FS_TYPE_FILE)
-        return FS_ERR_IS_A_DIRECTORY;
-
+    if (idx == -1) return FS_ERR_NOT_FOUND;
+    if (nodes[idx].type != FS_TYPE_FILE) return FS_ERR_IS_A_DIRECTORY;
     *out_content = nodes[idx].content;
     *out_len = nodes[idx].content_len;
     return FS_OK;
+}
+
+enum fs_result fs_cp(const char* src, const char* dst) {
+    int sidx = fs_find_child(cwd, src);
+    if (sidx == -1) return FS_ERR_NOT_FOUND;
+    if (nodes[sidx].type != FS_TYPE_FILE) return FS_ERR_IS_A_DIRECTORY;
+    if (!fs_is_valid_name(dst)) return FS_ERR_INVALID_NAME;
+    if (fs_find_child(cwd, dst) != -1) return FS_ERR_ALREADY_EXISTS;
+
+    int didx = fs_alloc_node();
+    if (didx == -1) return FS_ERR_NO_SPACE;
+
+    nodes[didx].type = FS_TYPE_FILE;
+    k_strcpy_truncate(nodes[didx].name, dst, FS_NAME_MAX);
+    nodes[didx].parent = cwd;
+    k_strcpy_truncate(nodes[didx].content, nodes[sidx].content, FS_FILE_MAX);
+    nodes[didx].content_len = nodes[sidx].content_len;
+    return FS_OK;
+}
+
+enum fs_result fs_mv(const char* src, const char* dst) {
+    int sidx = fs_find_child(cwd, src);
+    if (sidx == -1) return FS_ERR_NOT_FOUND;
+    if (!fs_is_valid_name(dst)) return FS_ERR_INVALID_NAME;
+    if (fs_find_child(cwd, dst) != -1) return FS_ERR_ALREADY_EXISTS;
+    k_strcpy_truncate(nodes[sidx].name, dst, FS_NAME_MAX);
+    return FS_OK;
+}
+
+enum fs_result fs_size(const char* name, size_t* out_size) {
+    int idx = fs_find_child(cwd, name);
+    if (idx == -1) return FS_ERR_NOT_FOUND;
+    if (nodes[idx].type == FS_TYPE_DIR) {
+        *out_size = 0;
+        return FS_ERR_IS_A_DIRECTORY;
+    }
+    *out_size = nodes[idx].content_len;
+    return FS_OK;
+}
+
+int fs_node_count(void) {
+    int n = 0;
+    for (int i = 0; i < FS_MAX_NODES; i++)
+        if (nodes[i].type != FS_TYPE_FREE) n++;
+    return n;
 }
 
 void fs_ls(void) {
@@ -195,11 +233,17 @@ void fs_ls(void) {
     for (int i = 0; i < FS_MAX_NODES; i++) {
         if (nodes[i].type != FS_TYPE_FREE && nodes[i].parent == cwd) {
             found_any = 1;
-            terminal_writestring("  ");
-            terminal_writestring(nodes[i].name);
-            if (nodes[i].type == FS_TYPE_DIR)
-                terminal_writestring("/");
-            terminal_writestring("\n");
+            if (nodes[i].type == FS_TYPE_DIR) {
+                terminal_writestring("  [DIR]  ");
+                terminal_writestring(nodes[i].name);
+                terminal_writestring("/\n");
+            } else {
+                terminal_writestring("  [FILE] ");
+                terminal_writestring(nodes[i].name);
+                terminal_writestring("  (");
+                terminal_write_uint((uint32_t)nodes[i].content_len);
+                terminal_writestring(" bytes)\n");
+            }
         }
     }
     if (!found_any)
@@ -217,7 +261,6 @@ void fs_pwd(char* buffer, size_t buffer_size) {
     }
 
     size_t pos = 0;
-
     if (depth == 1) {
         k_strcpy_truncate(buffer, "/", buffer_size);
         return;
@@ -226,7 +269,6 @@ void fs_pwd(char* buffer, size_t buffer_size) {
     for (int i = depth - 2; i >= 0; i--) {
         const char* name = nodes[path[i]].name;
         size_t name_len = k_strlen(name);
-
         if (pos + 1 < buffer_size) buffer[pos++] = '/';
         for (size_t j = 0; j < name_len && pos + 1 < buffer_size; j++)
             buffer[pos++] = name[j];
