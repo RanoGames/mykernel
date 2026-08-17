@@ -1,4 +1,8 @@
-/* vbe.c — Bochs VBE (DISPI) + linear framebuffer for QEMU stdvga */
+/* vbe.c — Bochs VBE (DISPI) + linear framebuffer for QEMU stdvga
+ *
+ * VirtualBox does NOT implement Bochs DISPI — probe must fail cleanly
+ * so callers fall back to Mode 13h / text.
+ */
 
 #include "vbe.h"
 #include "io.h"
@@ -31,6 +35,7 @@
 
 static struct vbe_info g_vbe;
 static int g_probed;
+static int g_dispi_ok; /* 1 only if Bochs DISPI ID readback is valid */
 
 static void dispi_write(uint16_t index, uint16_t value) {
     outw(VBE_DISPI_IOPORT_INDEX, index);
@@ -44,6 +49,7 @@ static uint16_t dispi_read(uint16_t index) {
 
 static uint32_t find_lfb_pci(void) {
     struct pci_device dev;
+    /* QEMU stdvga / bochs-display */
     if (pci_find_device(0x1234, 0x1111, &dev)) {
         uint32_t bar = dev.bar[0] & ~0xFu;
         if (bar) return bar;
@@ -52,20 +58,34 @@ static uint32_t find_lfb_pci(void) {
         uint32_t bar = dev.bar[0] & ~0xFu;
         if (bar) return bar;
     }
-    return 0xFD000000u;
+    return 0; /* no guess — VirtualBox BAR differs; without DISPI useless */
 }
 
 int vbe_probe(void) {
-    g_vbe.lfb = find_lfb_pci();
+    g_vbe.lfb = 0;
     g_vbe.width = 0;
     g_vbe.height = 0;
     g_vbe.bpp = 32;
     g_vbe.pitch = 0;
     g_vbe.active = 0;
+    g_dispi_ok = 0;
+    g_probed = 1;
+
+    /* Detect Bochs/QEMU DISPI: write ID5, read back must stay in B0C0..B0C5 */
     dispi_write(VBE_DISPI_INDEX_ID, VBE_DISPI_ID5);
     uint16_t id = dispi_read(VBE_DISPI_INDEX_ID);
-    (void)id;
-    g_probed = 1;
+    if (id < VBE_DISPI_ID0 || id > VBE_DISPI_ID5) {
+        /* VirtualBox and most real HW: ports ignored / 0xFFFF / garbage */
+        return 0;
+    }
+
+    g_vbe.lfb = find_lfb_pci();
+    if (!g_vbe.lfb) {
+        /* DISPI present but no LFB BAR — still unusable for us */
+        return 0;
+    }
+
+    g_dispi_ok = 1;
     return 1;
 }
 
@@ -77,8 +97,18 @@ int vbe_set_mode(int mode_id) {
         case VBE_MODE_1024x768: w = 1024; h = 768;  break;
         default:                w = 800;  h = 600;  break;
     }
-    if (!g_probed) vbe_probe();
-    if (!g_vbe.lfb) g_vbe.lfb = find_lfb_pci();
+
+    if (!g_probed && !vbe_probe())
+        return -1;
+    if (!g_dispi_ok) {
+        /* probe was called earlier and failed, or never succeeded */
+        if (!vbe_probe())
+            return -1;
+    }
+    if (!g_vbe.lfb)
+        g_vbe.lfb = find_lfb_pci();
+    if (!g_vbe.lfb || !g_dispi_ok)
+        return -1;
 
     dispi_write(VBE_DISPI_INDEX_ENABLE, VBE_DISPI_DISABLED);
     dispi_write(VBE_DISPI_INDEX_XRES, (uint16_t)w);
@@ -91,6 +121,16 @@ int vbe_set_mode(int mode_id) {
     dispi_write(VBE_DISPI_INDEX_ENABLE,
                 (uint16_t)(VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED));
 
+    /* Verify hardware accepted the mode (VirtualBox will not) */
+    uint16_t rw = dispi_read(VBE_DISPI_INDEX_XRES);
+    uint16_t rh = dispi_read(VBE_DISPI_INDEX_YRES);
+    uint16_t en = dispi_read(VBE_DISPI_INDEX_ENABLE);
+    if (rw != (uint16_t)w || rh != (uint16_t)h || !(en & VBE_DISPI_ENABLED)) {
+        dispi_write(VBE_DISPI_INDEX_ENABLE, VBE_DISPI_DISABLED);
+        g_vbe.active = 0;
+        return -1;
+    }
+
     g_vbe.width = w;
     g_vbe.height = h;
     g_vbe.bpp = 32;
@@ -100,7 +140,8 @@ int vbe_set_mode(int mode_id) {
 }
 
 void vbe_disable(void) {
-    dispi_write(VBE_DISPI_INDEX_ENABLE, VBE_DISPI_DISABLED);
+    if (g_dispi_ok)
+        dispi_write(VBE_DISPI_INDEX_ENABLE, VBE_DISPI_DISABLED);
     g_vbe.active = 0;
 }
 
@@ -135,26 +176,33 @@ void vbe_fill_rect(int x, int y, int w, int h, uint32_t color) {
 }
 
 void vbe_demo(void) {
+    terminal_writestring("VBE: probe...\n");
+    if (!vbe_probe()) {
+        terminal_writestring("VBE: DISPI not available (ok on VirtualBox)\n");
+        return;
+    }
     terminal_writestring("VBE: setting 800x600x32...\n");
     if (vbe_set_mode(VBE_MODE_800x600) != 0) {
         terminal_writestring("VBE: set_mode failed\n");
         return;
     }
-    for (uint32_t y = 0; y < g_vbe.height; y++) {
-        for (uint32_t x = 0; x < g_vbe.width; x++) {
-            uint8_t r = (uint8_t)(x * 255 / g_vbe.width);
-            uint8_t g = (uint8_t)(y * 255 / g_vbe.height);
-            uint8_t b = 80;
-            vbe_putpixel((int)x, (int)y, vbe_rgb(r, g, b));
-        }
+    const struct vbe_info* vi = vbe_get_info();
+    terminal_writestring("VBE: LFB=");
+    terminal_write_hex(vi->lfb);
+    terminal_writestring(" ");
+    terminal_write_uint(vi->width);
+    terminal_writestring("x");
+    terminal_write_uint(vi->height);
+    terminal_putchar('\n');
+
+    vbe_clear(0x00000020);
+    for (int i = 0; i < 8; i++) {
+        uint32_t c = vbe_rgb((uint8_t)(i * 32), (uint8_t)(255 - i * 20), 128);
+        vbe_fill_rect(40 + i * 80, 80, 60, 60, c);
     }
-    vbe_fill_rect(0, 0, (int)g_vbe.width, 4, vbe_rgb(255, 255, 255));
-    vbe_fill_rect(0, (int)g_vbe.height - 4, (int)g_vbe.width, 4, vbe_rgb(255, 255, 255));
-    vbe_fill_rect(0, 0, 4, (int)g_vbe.height, vbe_rgb(255, 255, 255));
-    vbe_fill_rect((int)g_vbe.width - 4, 0, 4, (int)g_vbe.height, vbe_rgb(255, 255, 255));
-    vbe_fill_rect(300, 250, 200, 100, vbe_rgb(0, 200, 80));
+    /* wait key */
+    terminal_writestring("VBE demo: press any key to restore text\n");
     (void)keyboard_getchar();
     vbe_disable();
     gfx_restore_text();
-    terminal_writestring("VBE: back to text mode\n");
 }

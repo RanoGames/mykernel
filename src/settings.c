@@ -4,6 +4,7 @@
 #include "vbe.h"
 #include "fat32.h"
 #include "vga.h"
+#include "gfx.h"
 #include "keyboard.h"
 #include "sound.h"
 #include <stddef.h>
@@ -130,7 +131,14 @@ static void show_status(void) {
     terminal_writestring(g_cfg.gfx_use_vbe ? " (VBE)\n" : " (Mode13 prefer)\n");
 }
 
+static void kbd_drain(void) {
+    char junk;
+    while (keyboard_trygetchar(&junk))
+        ;
+}
+
 void settings_menu(void) {
+    kbd_drain();
     terminal_writestring("\n=== MyKernel Settings ===\n");
     show_status();
     terminal_writestring(
@@ -144,17 +152,30 @@ void settings_menu(void) {
         "  8) Save to FAT (SETTINGS.CFG)\n"
         "  9) Load from FAT\n"
         "  0) Exit\n"
+        "(type one digit and wait — do not hold key)\n"
     );
 
     for (;;) {
         terminal_writestring("settings> ");
+        kbd_drain();
         char c = keyboard_getchar();
+        /* Ignore non-menu keys (VirtualBox may inject junk / repeats) */
+        if (c < 32 && c != 0) {
+            /* skip control chars except we already handle q via ascii */
+            continue;
+        }
         if (c == '0' || c == 'q' || c == 'Q') {
             terminal_putchar('\n');
             break;
         }
+        if (c < '1' || c > '9') {
+            /* do not spam status on garbage */
+            continue;
+        }
+
         terminal_putchar(c);
         terminal_putchar('\n');
+        kbd_drain(); /* drop autorepeat of the same key */
 
         if (c == '1') {
             g_cfg.sound_enabled = !g_cfg.sound_enabled;
@@ -165,31 +186,40 @@ void settings_menu(void) {
             g_cfg.gfx_use_vbe = 1;
             if (terminal_enable_fb(0) == 0)
                 terminal_writestring("system console: 640x480 VBE\n");
-            else
-                terminal_writestring("gfx_mode=640x480 (VBE failed)\n");
+            else {
+                g_cfg.gfx_use_vbe = 0;
+                terminal_writestring("gfx_mode=640x480 (VBE failed — Mode13 preferred)\n");
+            }
         } else if (c == '3') {
             g_cfg.gfx_mode = 1;
             g_cfg.gfx_use_vbe = 1;
             if (terminal_enable_fb(1) == 0)
                 terminal_writestring("system console: 800x600 VBE\n");
-            else
-                terminal_writestring("gfx_mode=800x600 (VBE failed)\n");
+            else {
+                g_cfg.gfx_use_vbe = 0;
+                terminal_writestring("gfx_mode=800x600 (VBE failed — Mode13 preferred)\n");
+            }
         } else if (c == '4') {
             g_cfg.gfx_mode = 2;
             g_cfg.gfx_use_vbe = 1;
             if (terminal_enable_fb(2) == 0)
                 terminal_writestring("system console: 1024x768 VBE\n");
-            else
-                terminal_writestring("gfx_mode=1024x768 (VBE failed)\n");
+            else {
+                g_cfg.gfx_use_vbe = 0;
+                terminal_writestring("gfx_mode=1024x768 (VBE failed — Mode13 preferred)\n");
+            }
         } else if (c == '5') {
             g_cfg.gfx_use_vbe = 1;
             if (terminal_enable_fb(g_cfg.gfx_mode) == 0)
                 terminal_writestring("prefer VBE + FB console on\n");
-            else
-                terminal_writestring("prefer VBE (FB failed)\n");
+            else {
+                g_cfg.gfx_use_vbe = 0;
+                terminal_writestring("prefer VBE (FB/DISPI failed — Mode13)\n");
+            }
         } else if (c == '6') {
             g_cfg.gfx_use_vbe = 0;
             terminal_disable_fb();
+            gfx_restore_text();
             terminal_writestring("prefer Mode13, text console restored\n");
         } else if (c == '7') {
             vbe_demo();
@@ -197,9 +227,8 @@ void settings_menu(void) {
             settings_save_fat();
         } else if (c == '9') {
             settings_load_fat();
-        } else {
-            terminal_writestring("?\n");
         }
         show_status();
+        kbd_drain();
     }
 }

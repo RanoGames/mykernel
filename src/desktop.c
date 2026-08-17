@@ -98,18 +98,31 @@ void desktop_run(void) {
             need_redraw = 1;
         }
 
-        /* Mouse motion: only move cursor (no full-screen redraw). */
+        /* Cursor only when not doing a full compose this frame */
         static int last_mx = -1, last_my = -1;
-        if (m.x != last_mx || m.y != last_my) {
-            mk_cursor_move(m.x, m.y);
+        int mouse_moved = (m.x != last_mx || m.y != last_my);
+        if (mouse_moved) {
             last_mx = m.x;
             last_my = m.y;
         }
 
+        /*
+         * Full compose is expensive (clears whole FB). During drag throttle
+         * to ~20 FPS (50ms at 100Hz timer) to reduce flicker.
+         * On release / close always redraw immediately.
+         */
         if (need_redraw) {
-            mk_compose();
-            need_redraw = 0;
-            last_draw = timer_ticks();
+            uint32_t now = timer_ticks();
+            uint32_t min_dt = dragging ? 5 : 0; /* 5 ticks ≈ 50ms */
+            if ((now - last_draw) >= min_dt || left_up || left_down) {
+                mk_compose();
+                need_redraw = 0;
+                last_draw = now;
+                last_mx = m.x;
+                last_my = m.y;
+            }
+        } else if (mouse_moved) {
+            mk_cursor_move(m.x, m.y);
         }
 
         prev_buttons = buttons;
