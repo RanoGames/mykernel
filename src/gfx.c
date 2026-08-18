@@ -43,10 +43,16 @@ static void gfx_set_text_palette(void) {
 }
 
 void gfx_wait_vsync(void) {
-    while (inb(0x3DA) & 0x08)
-        ;
-    while (!(inb(0x3DA) & 0x08))
-        ;
+    /* VirtualBox often never toggles 0x3DA bit3 — must not spin forever */
+    int i;
+    for (i = 0; i < 100000; i++) {
+        if (!(inb(0x3DA) & 0x08))
+            break;
+    }
+    for (i = 0; i < 100000; i++) {
+        if (inb(0x3DA) & 0x08)
+            break;
+    }
 }
 
 /* ---------- Mode 13h ---------- */

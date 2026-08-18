@@ -12,6 +12,7 @@
 #include "kmalloc.h"
 #include "syscall.h"
 #include "timer.h"
+#include "platform.h"
 #include "sched.h"
 #include "dyld.h"
 #include "pci.h"
@@ -36,6 +37,7 @@ void kernel_main(void) {
     irq_install();
     keyboard_init();
     mouse_init();
+    platform_init();
     fs_init();
     dyld_install_lib_tree();
     sched_init();

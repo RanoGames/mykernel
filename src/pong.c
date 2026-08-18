@@ -6,6 +6,7 @@
 #include "settings.h"
 #include "keyboard.h"
 #include "timer.h"
+#include "platform.h"
 #include "sound.h"
 #include "vga.h"
 #include <stdint.h>
@@ -24,10 +25,9 @@ static void rect(int x, int y, int w, int h, uint32_t c32, uint8_t c8) {
 
 void pong_run(void) {
     struct system_settings* cfg = settings_get();
-    use_vbe = cfg->gfx_use_vbe;
+    use_vbe = cfg->gfx_use_vbe && !platform_is_virtualbox();
     if (use_vbe) {
-        vbe_probe();
-        if (vbe_set_mode(cfg->gfx_mode) != 0) use_vbe = 0;
+        if (!vbe_probe() || vbe_set_mode(cfg->gfx_mode) != 0) use_vbe = 0;
         else {
             const struct vbe_info* vi = vbe_get_info();
             W = (int)vi->width; H = (int)vi->height;

@@ -6,6 +6,7 @@
 #include "settings.h"
 #include "keyboard.h"
 #include "timer.h"
+#include "platform.h"
 #include "sound.h"
 #include "vga.h"
 #include <stdint.h>
@@ -232,11 +233,10 @@ static void handle_key(char c) {
 
 void snake_run(void) {
     struct system_settings* cfg = settings_get();
-    use_vbe = cfg->gfx_use_vbe;
+    use_vbe = cfg->gfx_use_vbe && !platform_is_virtualbox();
 
     if (use_vbe) {
-        vbe_probe();
-        if (vbe_set_mode(cfg->gfx_mode) != 0) {
+        if (!vbe_probe() || vbe_set_mode(cfg->gfx_mode) != 0) {
             terminal_writestring("snake: VBE failed, fallback mode13\n");
             use_vbe = 0;
         } else {

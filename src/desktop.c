@@ -7,6 +7,7 @@
 #include "mouse.h"
 #include "keyboard.h"
 #include "vga.h"
+#include "platform.h"
 #include "gfx.h"
 #include "timer.h"
 #include "settings.h"
@@ -34,6 +35,12 @@ static void paint_welcome(struct mk_surface* s) {
 }
 
 void desktop_run(void) {
+    if (platform_is_virtualbox()) {
+        terminal_writestring("desktop: needs Bochs VBE (QEMU). Not supported on VirtualBox.\n");
+        terminal_writestring("Use QEMU for GUI, or snake/pong in Mode13 here.\n");
+        return;
+    }
+
     /* Prefer 800x600; fall back to 640x480 */
     int mode = VBE_MODE_800x600;
     if (mk_init(mode) != 0) {
