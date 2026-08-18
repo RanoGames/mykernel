@@ -133,6 +133,10 @@
 #define SYS_RENAMEAT      302
 #define SYS_FACCESSAT     307
 #define SYS_PIPE2         331
+#define SYS_GETRANDOM     355
+#define SYS_NICE           34
+#define SYS_GETHOSTNAME   414  /* not classic i386; helper for our libc */
+
 
 /* mmap flags (Linux) */
 #define PROT_READ   0x1

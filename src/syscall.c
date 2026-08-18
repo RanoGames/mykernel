@@ -349,10 +349,12 @@ static void cpy_str(char* d, const char* s, size_t n) {
     while (i < n) d[i++] = 0;
 }
 
+static char g_hostname[64] = "mykernel";
+
 static int sys_uname(struct mk_utsname* u) {
     if (!u) return -EFAULT;
     cpy_str(u->sysname, "MyKernel", 65);
-    cpy_str(u->nodename, "mykernel", 65);
+    cpy_str(u->nodename, g_hostname, 65);
     cpy_str(u->release, "0.2.0", 65);
     cpy_str(u->version, "hobby", 65);
     cpy_str(u->machine, "i686", 65);
@@ -537,6 +539,42 @@ static int sys_getdents64(int fd, void* dirp, uint32_t count) {
     return -ENOSYS; /* until FS dirents wired */
 }
 
+
+
+static int sys_getrandom(void* buf, uint32_t buflen, uint32_t flags) {
+    (void)flags;
+    if (!buf || buflen == 0) return -EINVAL;
+    uint8_t* p = (uint8_t*)buf;
+    static uint32_t rng = 0xA5A5A5A5u;
+    for (uint32_t i = 0; i < buflen; i++) {
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        rng += timer_ticks() + i;
+        p[i] = (uint8_t)(rng >> 16);
+    }
+    return (int)buflen;
+}
+
+static int sys_sethostname(const char* name, int len) {
+    if (!name || len <= 0 || len >= (int)sizeof(g_hostname)) return -EINVAL;
+    int i;
+    for (i = 0; i < len && name[i]; i++)
+        g_hostname[i] = name[i];
+    g_hostname[i] = '\0';
+    return 0;
+}
+
+static int sys_gethostname(char* buf, int len) {
+    if (!buf || len <= 0) return -EINVAL;
+    int i = 0;
+    while (g_hostname[i] && i < len - 1) {
+        buf[i] = g_hostname[i];
+        i++;
+    }
+    buf[i] = '\0';
+    return 0;
+}
 
 void syscall_handler(struct registers* regs) {
     uint32_t num = regs->eax;
@@ -770,12 +808,23 @@ void syscall_handler(struct registers* regs) {
             break;
 
         case SYS_REBOOT:
-            /* magic in ebx/ecx optional; edx = cmd */
             if (regs->edx == 0x4321FEDCu || regs->edx == 0xCDEF0123u)
                 machine_shutdown();
             else
                 machine_reboot();
             ret = 0;
+            break;
+        case SYS_GETRANDOM:
+            ret = sys_getrandom((void*)regs->ebx, regs->ecx, regs->edx);
+            break;
+        case SYS_NICE:
+            ret = 0; /* single-user: ignore */
+            break;
+        case SYS_SETHOSTNAME:
+            ret = sys_sethostname((const char*)regs->ebx, (int)regs->ecx);
+            break;
+        case SYS_GETHOSTNAME:
+            ret = sys_gethostname((char*)regs->ebx, (int)regs->ecx);
             break;
         default:
             ret = -ENOSYS;
