@@ -139,6 +139,7 @@ void mouse_init(void) {
     mouse_read();
 
     irq_register_handler(12, mouse_irq_handler);
+    irq_unmask(12);
 }
 
 void mouse_get(struct mouse_state* out) {

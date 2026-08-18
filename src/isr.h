@@ -24,4 +24,9 @@ void irq_install(void);        /* перепрограммирует PIC и ре
 /* Позволяет драйверам (например, клавиатуре) подписаться на свой IRQ */
 void irq_register_handler(uint8_t irq, irq_handler_t handler);
 
+void irq_mask(uint8_t irq);
+void irq_unmask(uint8_t irq);
+void pic_init_masks(void);
+uint16_t irq_get_mask(void); /* bit i set = IRQ i masked */
+
 #endif

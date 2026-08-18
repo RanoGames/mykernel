@@ -83,6 +83,7 @@ void isr_handler(struct registers* regs) {
     }
 }
 
+
 #define PIC1_COMMAND 0x20
 #define PIC1_DATA    0x21
 #define PIC2_COMMAND 0xA0
@@ -93,28 +94,79 @@ void isr_handler(struct registers* regs) {
 #define ICW4_8086    0x01
 
 static void pic_remap(void) {
+    uint8_t mask1 = inb(PIC1_DATA);
+    uint8_t mask2 = inb(PIC2_DATA);
+
     outb(PIC1_COMMAND, ICW1_INIT | ICW1_ICW4);
     io_wait();
     outb(PIC2_COMMAND, ICW1_INIT | ICW1_ICW4);
     io_wait();
-    outb(PIC1_DATA, 0x20);
+    outb(PIC1_DATA, 0x20); /* master IRQs → IDT 32..39 */
     io_wait();
-    outb(PIC2_DATA, 0x28);
+    outb(PIC2_DATA, 0x28); /* slave  IRQs → IDT 40..47 */
     io_wait();
-    outb(PIC1_DATA, 0x04);
+    outb(PIC1_DATA, 0x04); /* ICW3: slave on IRQ2 */
     io_wait();
-    outb(PIC2_DATA, 0x02);
+    outb(PIC2_DATA, 0x02); /* ICW3: cascade identity 2 */
     io_wait();
     outb(PIC1_DATA, ICW4_8086);
     io_wait();
     outb(PIC2_DATA, ICW4_8086);
     io_wait();
-    outb(PIC1_DATA, 0x00);
-    outb(PIC2_DATA, 0x00);
+
+    outb(PIC1_DATA, mask1);
+    outb(PIC2_DATA, mask2);
+}
+
+void pic_init_masks(void) {
+    outb(PIC1_DATA, 0xFF);
+    outb(PIC2_DATA, 0xFF);
+}
+
+void irq_mask(uint8_t irq) {
+    uint16_t port;
+    uint8_t bit;
+
+    if (irq < 8) {
+        port = PIC1_DATA;
+        bit = irq;
+    } else {
+        port = PIC2_DATA;
+        bit = (uint8_t)(irq - 8);
+    }
+    outb(port, (uint8_t)(inb(port) | (uint8_t)(1u << bit)));
+}
+
+void irq_unmask(uint8_t irq) {
+    uint16_t port;
+    uint8_t bit;
+
+    if (irq < 8) {
+        port = PIC1_DATA;
+        bit = irq;
+    } else {
+        port = PIC2_DATA;
+        bit = (uint8_t)(irq - 8);
+        /* open cascade IRQ2 on master so slave can signal */
+        outb(PIC1_DATA, (uint8_t)(inb(PIC1_DATA) & (uint8_t)~(1u << 2)));
+    }
+    outb(port, (uint8_t)(inb(port) & (uint8_t)~(1u << bit)));
+}
+
+uint16_t irq_get_mask(void) {
+    return (uint16_t)inb(PIC1_DATA) | ((uint16_t)inb(PIC2_DATA) << 8);
+}
+
+static void pic_send_eoi(uint8_t irq) {
+    if (irq >= 8)
+        outb(PIC2_COMMAND, PIC_EOI);
+    outb(PIC1_COMMAND, PIC_EOI);
 }
 
 void irq_install(void) {
     pic_remap();
+    pic_init_masks(); /* all masked; drivers call irq_unmask() */
+
     idt_set_gate(32, (uint32_t) irq0,  0x08, IDT_FLAGS);
     idt_set_gate(33, (uint32_t) irq1,  0x08, IDT_FLAGS);
     idt_set_gate(34, (uint32_t) irq2,  0x08, IDT_FLAGS);
@@ -134,10 +186,12 @@ void irq_install(void) {
 }
 
 void irq_handler(struct registers* regs) {
-    int irq_num = regs->int_no - 32;
-    if (irq_handlers[irq_num] != 0)
+    int irq_num = (int)regs->int_no - 32;
+    if (irq_num < 0 || irq_num > 15)
+        return;
+
+    if (irq_handlers[irq_num])
         irq_handlers[irq_num](regs);
-    if (irq_num >= 8)
-        outb(PIC2_COMMAND, PIC_EOI);
-    outb(PIC1_COMMAND, PIC_EOI);
+
+    pic_send_eoi((uint8_t)irq_num);
 }

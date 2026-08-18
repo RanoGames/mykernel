@@ -1,4 +1,4 @@
-/* timer.c — Programmable Interval Timer (PIT), IRQ0 */
+/* timer.c — PIT channel 0 → IRQ0 → timer_callback */
 
 #include "timer.h"
 #include "isr.h"
@@ -12,12 +12,22 @@
 static volatile uint32_t g_ticks;
 static uint32_t g_hz = 100;
 
+/*
+ * IRQ0 handler (called from irq_handler after PIC delivered vector 32).
+ * Keep short: increment tick, optional schedule.
+ */
 static void timer_callback(struct registers* regs) {
     (void)regs;
     g_ticks++;
     sched_on_tick();
 }
 
+/*
+ * Program PIT to `hz` (typically 100) and enable IRQ0 on the PIC.
+ *
+ * Mode 3 (square wave), access lobyte/hibyte, channel 0.
+ * divisor = 1193182 / hz  (input clock of the 8253/8254).
+ */
 void timer_init(uint32_t hz) {
     if (hz == 0) hz = 100;
     if (hz > 1000) hz = 1000;
@@ -26,13 +36,16 @@ void timer_init(uint32_t hz) {
     if (divisor < 1) divisor = 1;
     if (divisor > 65535) divisor = 65535;
 
-    outb(PIT_COMMAND, 0x36);
+    outb(PIT_COMMAND, 0x36); /* ch0, lobyte/hibyte, mode 3, binary */
     outb(PIT_CHANNEL0, (uint8_t)(divisor & 0xFF));
     outb(PIT_CHANNEL0, (uint8_t)((divisor >> 8) & 0xFF));
 
     g_ticks = 0;
     g_hz = hz;
+
     irq_register_handler(0, timer_callback);
+    irq_unmask(0); /* allow IRQ0 through PIC master */
+    /* IF (sti) is enabled later in kernel_main */
 }
 
 void timer_sleep_ms(uint32_t ms) {
@@ -40,7 +53,6 @@ void timer_sleep_ms(uint32_t ms) {
     uint32_t need = (g_hz * ms) / 1000;
     if (need == 0) need = 1;
 
-    /* Prefer PIT; if IRQ0 dead (some VMs), busy-wait */
     uint32_t spins = 0;
     while ((g_ticks - start) < need) {
         if (g_ticks == start) {
@@ -54,9 +66,7 @@ void timer_sleep_ms(uint32_t ms) {
     }
 }
 
-/* Rough busy-wait — works without IRQ0 (VirtualBox quirks) */
 void timer_busy_ms(uint32_t ms) {
-    /* ~calibrated for typical QEMU/VBox i686; not exact */
     for (uint32_t m = 0; m < ms; m++) {
         for (volatile uint32_t i = 0; i < 20000u; i++)
             __asm__ volatile ("pause");
@@ -71,7 +81,6 @@ uint32_t timer_hz(void) {
     return g_hz;
 }
 
-/* True if IRQ0 advanced recently */
 int timer_is_alive(void) {
     uint32_t a = g_ticks;
     timer_busy_ms(20);

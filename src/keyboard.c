@@ -98,6 +98,7 @@ static void keyboard_irq_handler(struct registers* regs) {
 
 void keyboard_init(void) {
     irq_register_handler(1, keyboard_irq_handler);
+    irq_unmask(1);
 }
 
 int keyboard_trygetchar(char* out) {
