@@ -54,6 +54,7 @@ static int id_about = -1;
 static int id_tasks = -1;
 static int id_notes = -1;
 static int id_help = -1;
+static int id_trash = -1;
 
 static int start_open;
 static int calc_acc, calc_val, calc_op; /* op: 0 none 1+ 2- 3* */
@@ -187,6 +188,18 @@ static void paint_notes(struct mk_surface* s) {
     mk_buf_text(s->pixels, s->w, s->h, 12, 130, "(read-only sticky)", 0x00888888, 0x00FFF8DC);
 }
 
+
+static void paint_trash(struct mk_surface* s) {
+    if (!s || !s->pixels) return;
+    mk_buf_fill(s->pixels, s->w, s->h, 0x00F0F0F0);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 12, "Recycle Bin", 0, 0x00F0F0F0);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 40, "Empty (demo)", 0x00666666, 0x00F0F0F0);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 64, "No deleted files yet.", 0, 0x00F0F0F0);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 88, "Future: drop windows here", 0x00333333, 0x00F0F0F0);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 120, "Icon uses screen coords:", 0, 0x00F0F0F0);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 140, "origin top-left, Y down", 0x00006699, 0x00F0F0F0);
+}
+
 static void paint_help(struct mk_surface* s) {
     if (!s || !s->pixels) return;
     mk_buf_fill(s->pixels, s->w, s->h, 0x00FFFFFF);
@@ -217,6 +230,7 @@ static void open_about(void)   { OPEN_APP(id_about, 300, 170, "About", paint_abo
 static void open_tasks(void)   { OPEN_APP(id_tasks, 300, 160, "Tasks", paint_tasks); }
 static void open_notes(void)   { OPEN_APP(id_notes, 280, 160, "Notes", paint_notes); }
 static void open_help(void)    { OPEN_APP(id_help, 320, 170, "Help", paint_help); }
+static void open_trash(void)   { OPEN_APP(id_trash, 300, 170, "Recycle Bin", paint_trash); }
 
 static void on_close_id(int id) {
     if (id == id_welcome) id_welcome = -1;
@@ -227,26 +241,51 @@ static void on_close_id(int id) {
     if (id == id_tasks) id_tasks = -1;
     if (id == id_notes) id_notes = -1;
     if (id == id_help) id_help = -1;
+    if (id == id_trash) id_trash = -1;
 }
 
-/* ---- desktop icons ---- */
+/* ---- desktop icons ----
+ * Coordinate system (screen / VBE framebuffer):
+ *   (0,0) = top-left of the screen
+ *   X grows right, Y grows down
+ *   mouse_get() and mk_hit_test() use the same space
+ *   panel occupies y in [screen_h - MK_PANEL_H, screen_h)
+ *   icon hitbox ≈ [x, x+ICON_W) x [y, y+ICON_H)
+ */
+#define ICON_W 60
+#define ICON_H 70
+#define PANEL_H 28
+
 struct desk_icon {
-    int x, y;
+    int x, y;           /* top-left of icon body; -1,-1 = auto place */
+    int anchor;         /* 0=fixed xy, 1=bottom-right (Recycle) */
     const char* label;
     void (*open)(void);
 };
 
 static struct desk_icon icons[] = {
-    { 20,  48,  "Clock",    open_clock },
-    { 20,  118, "SysInfo",  open_sysinfo },
-    { 20,  188, "Calc",     open_calc },
-    { 20,  258, "About",    open_about },
-    { 100, 48,  "Tasks",    open_tasks },
-    { 100, 118, "Notes",    open_notes },
-    { 100, 188, "Help",     open_help },
-    { 100, 258, "Welcome",  open_welcome },
+    { 20,  48,  0, "Clock",    open_clock },
+    { 20,  118, 0, "SysInfo",  open_sysinfo },
+    { 20,  188, 0, "Calc",     open_calc },
+    { 20,  258, 0, "About",    open_about },
+    { 100, 48,  0, "Tasks",    open_tasks },
+    { 100, 118, 0, "Notes",    open_notes },
+    { 100, 188, 0, "Help",     open_help },
+    { 100, 258, 0, "Welcome",  open_welcome },
+    { -1,  -1,  1, "Recycle",  open_trash }, /* bottom-right */
 };
 #define N_ICONS ((int)(sizeof(icons) / sizeof(icons[0])))
+
+static void icon_pos(int i, int* ox, int* oy) {
+    if (icons[i].anchor == 1) {
+        /* bottom-right above taskbar, classic Recycle Bin */
+        *ox = mk_screen_w() - ICON_W - 16;
+        *oy = mk_screen_h() - PANEL_H - ICON_H - 12;
+    } else {
+        *ox = icons[i].x;
+        *oy = icons[i].y;
+    }
+}
 
 static uint32_t icon_color(int i) {
     static const uint32_t cols[] = {
@@ -257,24 +296,34 @@ static uint32_t icon_color(int i) {
 }
 
 static void draw_icon(int idx, int x, int y, const char* label) {
-    uint32_t c = icon_color(idx);
+    int is_trash = (icons[idx].anchor == 1);
+    uint32_t c = is_trash ? 0x00666666 : icon_color(idx);
     /* shadow */
     mk_bb_fill(x + 3, y + 3, 56, 48, 0x00202020);
     /* body */
     mk_bb_fill(x, y, 56, 48, 0x00FFFFFF);
     mk_bb_fill(x + 3, y + 3, 50, 42, c);
-    /* letter badge */
-    char badge[2] = { label[0], 0 };
-    mk_bb_text(x + 22, y + 14, badge, 0x00FFFFFF, c);
-    /* label under icon with dark strip for contrast */
-    mk_bb_fill(x - 2, y + 52, 60, 16, 0x00000000);
+    if (is_trash) {
+        /* simple bin glyph: lid + can */
+        mk_bb_fill(x + 14, y + 10, 28, 4, 0x00DDDDDD);
+        mk_bb_fill(x + 24, y + 6, 8, 6, 0x00DDDDDD);
+        mk_bb_fill(x + 16, y + 16, 24, 22, 0x00AAAAAA);
+        mk_bb_fill(x + 20, y + 20, 4, 14, 0x00444444);
+        mk_bb_fill(x + 26, y + 20, 4, 14, 0x00444444);
+        mk_bb_fill(x + 32, y + 20, 4, 14, 0x00444444);
+    } else {
+        char badge[2] = { label[0], 0 };
+        mk_bb_text(x + 22, y + 14, badge, 0x00FFFFFF, c);
+    }
+    mk_bb_fill(x - 2, y + 52, 64, 16, 0x00000000);
     mk_bb_text(x + 2, y + 54, label, 0x00FFFFFF, 0x00000000);
 }
 
 static int icon_at(int mx, int my) {
     for (int i = 0; i < N_ICONS; i++) {
-        int x = icons[i].x, y = icons[i].y;
-        if (mx >= x && mx < x + 60 && my >= y && my < y + 70)
+        int x, y;
+        icon_pos(i, &x, &y);
+        if (mx >= x && mx < x + ICON_W && my >= y && my < y + ICON_H)
             return i;
     }
     return -1;
@@ -287,7 +336,7 @@ static int icon_at(int mx, int my) {
 
 static int start_menu_h(void) {
     /* 8 apps + separator + reboot + shutdown + empty */
-    return 28 + 8 * SM_ITEM_H + 8 + 2 * SM_ITEM_H + 8;
+    return 28 + 8 * SM_ITEM_H + 8 + 3 * SM_ITEM_H + 8;
 }
 
 static void start_btn_rect(int* x, int* y, int* w, int* h) {
@@ -328,6 +377,9 @@ static void draw_start_menu(void) {
     }
     mk_bb_fill(x, iy, w, 1, 0x00444444);
     iy += 6;
+    mk_bb_fill(x + 8, iy, w - 16, SM_ITEM_H - 2, 0x00555555);
+    mk_bb_text(x + 16, iy + 2, "Recycle Bin", 0x00FFFFFF, 0x00555555);
+    iy += SM_ITEM_H;
     mk_bb_fill(x + 8, iy, w - 16, SM_ITEM_H - 2, 0x00C19C00);
     mk_bb_text(x + 20, iy + 2, "Reboot", 0x00FFFFFF, 0x00C19C00);
     iy += SM_ITEM_H;
@@ -347,6 +399,8 @@ static int start_menu_click(int mx, int my) {
         iy += SM_ITEM_H;
     }
     iy += 6;
+    if (my >= iy && my < iy + SM_ITEM_H) return 99;  /* recycle */
+    iy += SM_ITEM_H;
     if (my >= iy && my < iy + SM_ITEM_H) return 100;
     iy += SM_ITEM_H;
     if (my >= iy && my < iy + SM_ITEM_H) return 101;
@@ -354,10 +408,11 @@ static int start_menu_click(int mx, int my) {
 }
 
 static void desktop_layer_paint(void) {
-    /* icons under windows */
     for (int i = 0; i < N_ICONS; i++) {
-        if (icons[i].y + 70 < mk_screen_h() - 28)
-            draw_icon(i, icons[i].x, icons[i].y, icons[i].label);
+        int x, y;
+        icon_pos(i, &x, &y);
+        if (y + ICON_H <= mk_screen_h() - PANEL_H)
+            draw_icon(i, x, y, icons[i].label);
     }
 }
 
@@ -392,7 +447,7 @@ void desktop_run(void) {
     start_open = 0;
     calc_acc = calc_val = calc_op = 0;
     id_welcome = id_clock = id_sysinfo = id_calc = -1;
-    id_about = id_tasks = id_notes = id_help = -1;
+    id_about = id_tasks = id_notes = id_help = id_trash = -1;
 
     mk_set_desktop_layer(desktop_layer_paint);
     mk_set_desktop_overlay(desktop_overlay_paint);
@@ -482,6 +537,10 @@ void desktop_run(void) {
                         open_tasks, open_notes, open_help, open_welcome
                     };
                     ops[sm]();
+                    start_open = 0;
+                    need_redraw = 1;
+                } else if (sm == 99) {
+                    open_trash();
                     start_open = 0;
                     need_redraw = 1;
                 } else if (sm == 100) {
