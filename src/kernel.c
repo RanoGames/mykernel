@@ -8,6 +8,8 @@
 #include "keyboard.h"
 #include "mouse.h"
 #include "fs.h"
+#include "vfs.h"
+#include "net.h"
 #include "ata.h"
 #include "kmalloc.h"
 #include "syscall.h"
@@ -39,6 +41,8 @@ void kernel_main(void) {
     mouse_init();
     platform_init();
     fs_init();
+    vfs_init();
+    net_init();
     dyld_install_lib_tree();
     sched_init();
     timer_init(100); /* PIT IRQ0 @ 100 Hz (10 ms/tick) */

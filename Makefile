@@ -33,7 +33,7 @@ else
 endif
 
 ASM_SOURCES = boot.s gdt_flush.s idt_load.s isr.s context_switch.s setjmp.s
-C_SOURCES   = kernel.c gdt.c serial.c vga.c idt.c irq.c keyboard.c shell.c fs.c calc.c syscall.c elf.c process.c ata.c fat32.c kmalloc.c mlang.c timer.c sched.c dyld.c gfx.c mouse.c snake.c pong.c sound.c pci.c ac97.c vbe.c settings.c platform.c mkdraw.c mkdisp.c desktop.c power.c
+C_SOURCES   = kernel.c gdt.c serial.c vga.c idt.c irq.c keyboard.c shell.c fs.c vfs.c calc.c syscall.c elf.c process.c ata.c fat32.c part.c install.c kmalloc.c mlang.c timer.c sched.c dyld.c gfx.c mouse.c snake.c pong.c sound.c pci.c ac97.c vbe.c settings.c platform.c mkdraw.c mkdisp.c desktop.c power.c net.c
 
 ASM_OBJECTS = $(ASM_SOURCES:%.s=$(BUILD_DIR)/%.o)
 C_OBJECTS   = $(C_SOURCES:%.c=$(BUILD_DIR)/%.o)
@@ -136,3 +136,53 @@ run-iso: iso
 
 clean:
 	rm -rf $(BUILD_DIR)
+
+
+# --- Bootloader binaries ---
+$(BUILD_DIR)/mbr.bin $(BUILD_DIR)/stage2.bin:
+	bash boot/build_boot.sh
+
+# Embed kernel + boot into kernel only when KERNEL_PAYLOAD=1 (second link pass)
+ifeq ($(KERNEL_PAYLOAD),1)
+PAYLOAD_OBJS = $(BUILD_DIR)/mykernel_payload.o $(BUILD_DIR)/mbr_blob.o $(BUILD_DIR)/stage2_blob.o
+$(BUILD_DIR)/mykernel_payload.o: $(BUILD_DIR)/mykernel.bin
+	$(OBJCOPY) -I binary -O elf32-i386 -B i386 $< $@
+$(BUILD_DIR)/mbr_blob.o: $(BUILD_DIR)/mbr.bin
+	$(OBJCOPY) -I binary -O elf32-i386 -B i386 $< $@
+$(BUILD_DIR)/stage2_blob.o: $(BUILD_DIR)/stage2.bin
+	$(OBJCOPY) -I binary -O elf32-i386 -B i386 $< $@
+endif
+
+# Host-side disk image with kernel embedded (preferred installer image)
+.PHONY: disk.img
+disk.img: $(BUILD_DIR)/mykernel.bin $(BUILD_DIR)/mbr.bin $(BUILD_DIR)/stage2.bin
+	python3 boot/mkdisk.py $(BUILD_DIR)/mykernel.bin $(BUILD_DIR)/mbr.bin $(BUILD_DIR)/stage2.bin disk.img
+	@echo "Created disk.img — boot: qemu-system-i386 -hda disk.img -m 128"
+
+
+# ========== x86_64 + Multiboot2 (parallel tree src64/) ==========
+BUILD64 = build64
+CFLAGS64 = -std=gnu99 -ffreestanding -fno-stack-protector -fno-pic -fno-pie -Wall -Wextra -O2 -m64 -mcmodel=kernel -mno-red-zone -ffunction-sections -Isrc64
+LDFLAGS64 = -nostdlib -static -Wl,--build-id=none -z max-page-size=0x1000
+
+.PHONY: kernel64 clean64
+kernel64: $(BUILD64)/mykernel64.bin
+
+$(BUILD64):
+	mkdir -p $(BUILD64)
+
+$(BUILD64)/boot64.o: src64/boot64.s | $(BUILD64)
+	as --64 $< -o $@
+
+$(BUILD64)/kernel64.o: src64/kernel64.c | $(BUILD64)
+	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/paging64.o: src64/paging64.c src64/paging64.h | $(BUILD64)
+	$(CC) $(CFLAGS64) -c $< -o $@
+
+$(BUILD64)/mykernel64.bin: $(BUILD64)/boot64.o $(BUILD64)/kernel64.o $(BUILD64)/paging64.o src64/linker64.ld
+	$(CC) -T src64/linker64.ld $(LDFLAGS64) -o $@ $(BUILD64)/boot64.o $(BUILD64)/kernel64.o $(BUILD64)/paging64.o
+	@echo "Built $@ — run: qemu-system-x86_64 -kernel $@"
+
+clean64:
+	rm -rf $(BUILD64)

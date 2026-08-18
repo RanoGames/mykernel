@@ -357,6 +357,11 @@ static int ls_cb(const struct fat_dirent* de, void* ctx) {
     return 0;
 }
 
+void fat32_set_partition_lba(uint32_t lba) {
+    partition_lba = lba;
+    mounted = 0;
+}
+
 int fat32_mount(void) {
     mounted = 0;
     if (!ata_present()) {
@@ -535,6 +540,194 @@ enum fat_result fat32_read_file(const char* name, char* buf, size_t buf_size, si
     return FAT_OK;
 }
 
+
+enum fat_result fat32_mkdir(const char* name) {
+    if (!mounted) return FAT_ERR_NOT_MOUNTED;
+    if (!name || !name[0]) return FAT_ERR_NOT_FOUND;
+
+    struct find_ctx fc;
+    fc.name = name;
+    fc.ok = 0;
+    if (iterate_dir(root_cluster, find_cb, &fc) < 0) return FAT_ERR_IO;
+    if (fc.ok) return FAT_ERR_EXISTS;
+
+    uint32_t dir_cl = fat_alloc_cluster();
+    if (!dir_cl) return FAT_ERR_NO_SPACE;
+
+    /* empty dir cluster with . and .. */
+    mem_set(cluster_buf, 0, (size_t)sectors_per_cluster * SECTOR_SIZE);
+    struct fat_dirent* dot = (struct fat_dirent*)cluster_buf;
+    mem_set(dot, 0, sizeof(*dot));
+    for (int i = 0; i < 11; i++) dot->name[i] = ' ';
+    dot->name[0] = '.';
+    dot->attr = ATTR_DIRECTORY;
+    dot->first_cluster_hi = (uint16_t)(dir_cl >> 16);
+    dot->first_cluster_lo = (uint16_t)(dir_cl & 0xFFFF);
+
+    struct fat_dirent* dotdot = (struct fat_dirent*)(cluster_buf + 32);
+    mem_set(dotdot, 0, sizeof(*dotdot));
+    for (int i = 0; i < 11; i++) dotdot->name[i] = ' ';
+    dotdot->name[0] = '.';
+    dotdot->name[1] = '.';
+    dotdot->attr = ATTR_DIRECTORY;
+    dotdot->first_cluster_hi = (uint16_t)(root_cluster >> 16);
+    dotdot->first_cluster_lo = (uint16_t)(root_cluster & 0xFFFF);
+
+    if (write_cluster(dir_cl) != 0) {
+        fat_set(dir_cl, 0);
+        return FAT_ERR_IO;
+    }
+
+    struct slot_ctx sc;
+    name_to_83(name, sc.want);
+    sc.found = 0;
+    sc.found_existing = 0;
+    int sr = find_slot_in_root(&sc);
+    if (sr < 0) {
+        fat_free_chain(dir_cl);
+        return sr == -2 ? FAT_ERR_NO_SPACE : FAT_ERR_IO;
+    }
+    if (sc.found_existing) {
+        fat_free_chain(dir_cl);
+        return FAT_ERR_EXISTS;
+    }
+
+    if (read_cluster(sc.cluster) != 0) return FAT_ERR_IO;
+    struct fat_dirent* de = (struct fat_dirent*)(cluster_buf + sc.offset);
+    mem_set(de, 0, sizeof(*de));
+    for (int i = 0; i < 11; i++) de->name[i] = sc.want[i];
+    de->attr = ATTR_DIRECTORY;
+    de->first_cluster_hi = (uint16_t)(dir_cl >> 16);
+    de->first_cluster_lo = (uint16_t)(dir_cl & 0xFFFF);
+    de->file_size = 0;
+    if (write_cluster(sc.cluster) != 0) return FAT_ERR_IO;
+    return FAT_OK;
+}
+
+enum fat_result fat32_unlink(const char* name) {
+    if (!mounted) return FAT_ERR_NOT_MOUNTED;
+    if (!name || !name[0]) return FAT_ERR_NOT_FOUND;
+
+    struct slot_ctx sc;
+    name_to_83(name, sc.want);
+    sc.found = 0;
+    sc.found_existing = 0;
+    if (find_slot_in_root(&sc) < 0)
+        return FAT_ERR_IO;
+    if (!sc.found_existing)
+        return FAT_ERR_NOT_FOUND;
+
+    uint32_t cl = ((uint32_t)sc.existing.first_cluster_hi << 16) | sc.existing.first_cluster_lo;
+
+    if (sc.existing.attr & ATTR_DIRECTORY) {
+        if (cl >= 2) {
+            if (read_cluster(cl) != 0) return FAT_ERR_IO;
+            size_t bytes = (size_t)sectors_per_cluster * SECTOR_SIZE;
+            for (size_t off = 0; off + 32 <= bytes; off += 32) {
+                struct fat_dirent* de = (struct fat_dirent*)(cluster_buf + off);
+                uint8_t f = (uint8_t)de->name[0];
+                if (f == 0x00) break;
+                if (f == 0xE5 || de->attr == ATTR_LFN) continue;
+                if (de->name[0] == '.' && de->name[1] == ' ') continue;
+                if (de->name[0] == '.' && de->name[1] == '.' && de->name[2] == ' ') continue;
+                return FAT_ERR_NOT_EMPTY;
+            }
+        }
+    }
+
+    if (read_cluster(sc.cluster) != 0) return FAT_ERR_IO;
+    struct fat_dirent* de = (struct fat_dirent*)(cluster_buf + sc.offset);
+    de->name[0] = (char)0xE5;
+    if (write_cluster(sc.cluster) != 0) return FAT_ERR_IO;
+    if (cl >= 2)
+        fat_free_chain(cl);
+    return FAT_OK;
+}
+
+/* Minimal FAT32 mkfs on partition starting at part_lba, size_sectors sectors */
+enum fat_result fat32_mkfs(uint32_t part_lba, uint32_t size_sectors) {
+    if (!ata_present()) return FAT_ERR_NO_DISK;
+    if (size_sectors < 2048) size_sectors = 65536; /* default ~32MB */
+
+    uint8_t spc = 8; /* 4K clusters */
+    uint32_t reserved = 32;
+    uint8_t fats = 2;
+    /* rough FAT size */
+    uint32_t data_sectors = size_sectors - reserved;
+    uint32_t clusters = data_sectors / spc;
+    uint32_t fat_sz = (clusters * 4 + 511) / 512;
+    if (fat_sz < 1) fat_sz = 1;
+    /* recalc */
+    data_sectors = size_sectors - reserved - fats * fat_sz;
+    clusters = data_sectors / spc;
+    fat_sz = (clusters * 4 + 511) / 512;
+
+    mem_set(sector_buf, 0, SECTOR_SIZE);
+    struct fat32_bpb* b = (struct fat32_bpb*)sector_buf;
+    b->jmp[0] = 0xEB; b->jmp[1] = 0x58; b->jmp[2] = 0x90;
+    mem_copy(b->oem, "MSWIN4.1", 8);
+    b->bytes_per_sector = 512;
+    b->sectors_per_cluster = spc;
+    b->reserved_sectors = (uint16_t)reserved;
+    b->num_fats = fats;
+    b->root_entry_count = 0;
+    b->total_sectors_16 = 0;
+    b->media = 0xF8;
+    b->fat_size_16 = 0;
+    b->sectors_per_track = 63;
+    b->num_heads = 255;
+    b->hidden_sectors = part_lba;
+    b->total_sectors_32 = size_sectors;
+    b->fat_size_32 = fat_sz;
+    b->ext_flags = 0;
+    b->fs_version = 0;
+    b->root_cluster = 2;
+    b->fs_info = 1;
+    b->backup_boot = 6;
+    b->drive_number = 0x80;
+    b->boot_signature = 0x29;
+    b->volume_id = 0x12345678;
+    mem_copy(b->volume_label, "MYKERNEL   ", 11);
+    mem_copy(b->fs_type, "FAT32   ", 8);
+    sector_buf[510] = 0x55;
+    sector_buf[511] = 0xAA;
+    if (ata_write_sectors(part_lba, 1, sector_buf) != 0) return FAT_ERR_IO;
+
+    /* FSInfo sector */
+    mem_set(sector_buf, 0, SECTOR_SIZE);
+    sector_buf[0] = 0x52; sector_buf[1] = 0x52; sector_buf[2] = 0x61; sector_buf[3] = 0x41;
+    sector_buf[484] = 0x72; sector_buf[485] = 0x72; sector_buf[486] = 0x41; sector_buf[487] = 0x61;
+    /* free count / next free */
+    sector_buf[488] = 0xFF; sector_buf[489] = 0xFF; sector_buf[490] = 0xFF; sector_buf[491] = 0xFF;
+    sector_buf[492] = 0x02; /* next free cluster hint */
+    sector_buf[510] = 0x55; sector_buf[511] = 0xAA;
+    if (ata_write_sectors(part_lba + 1, 1, sector_buf) != 0) return FAT_ERR_IO;
+
+    /* zero FATs */
+    mem_set(sector_buf, 0, SECTOR_SIZE);
+    for (uint8_t f = 0; f < fats; f++) {
+        uint32_t fat_lba = part_lba + reserved + f * fat_sz;
+        for (uint32_t s = 0; s < fat_sz; s++) {
+            if (ata_write_sectors(fat_lba + s, 1, sector_buf) != 0) return FAT_ERR_IO;
+        }
+        /* first two entries media + EOC, cluster 2 = EOC root */
+        if (ata_read_sectors(fat_lba, 1, sector_buf) != 0) return FAT_ERR_IO;
+        sector_buf[0] = 0xF8; sector_buf[1] = 0xFF; sector_buf[2] = 0xFF; sector_buf[3] = 0x0F;
+        sector_buf[4] = 0xFF; sector_buf[5] = 0xFF; sector_buf[6] = 0xFF; sector_buf[7] = 0x0F;
+        sector_buf[8] = 0xFF; sector_buf[9] = 0xFF; sector_buf[10] = 0xFF; sector_buf[11] = 0x0F;
+        if (ata_write_sectors(fat_lba, 1, sector_buf) != 0) return FAT_ERR_IO;
+    }
+
+    /* zero root cluster */
+    mem_set(cluster_buf, 0, SECTOR_SIZE * 8);
+    uint32_t data_lba = part_lba + reserved + fats * fat_sz;
+    if (ata_write_sectors(data_lba, spc, cluster_buf) != 0) return FAT_ERR_IO;
+
+    partition_lba = part_lba;
+    mounted = 0;
+    return FAT_OK;
+}
+
 const char* fat_strerror(enum fat_result r) {
     switch (r) {
         case FAT_OK: return "OK";
@@ -548,6 +741,7 @@ const char* fat_strerror(enum fat_result r) {
         case FAT_ERR_NOT_MOUNTED: return "not mounted (fatmount)";
         case FAT_ERR_NO_SPACE: return "no space";
         case FAT_ERR_EXISTS: return "already exists";
+        case FAT_ERR_NOT_EMPTY: return "directory not empty";
         default: return "unknown";
     }
 }

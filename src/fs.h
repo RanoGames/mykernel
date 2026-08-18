@@ -34,7 +34,8 @@ enum fs_result fs_append(const char* name, const char* text);
 enum fs_result fs_read(const char* name, const char** out_content, size_t* out_len);
 enum fs_result fs_read_path(const char* path, const char** out_content, size_t* out_len);
 enum fs_result fs_cp(const char* src, const char* dst);
-enum fs_result fs_mv(const char* src, const char* dst);
+enum fs_result fs_mv(const char* src, const char* dst); /* atomic under FS lock */
+/* Exclusive create: fails if name exists (like open O_EXCL) — use fs_touch */
 enum fs_result fs_size(const char* name, size_t* out_size);
 enum fs_result fs_mkdir_p(const char* path);
 

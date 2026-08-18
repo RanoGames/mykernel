@@ -1,6 +1,7 @@
 /* process.c — exec ELF через dyld; возврат в shell через setjmp/longjmp */
 
 #include "process.h"
+#include "gdt.h"
 #include "elf.h"
 #include "dyld.h"
 #include "syscall.h"
@@ -83,20 +84,35 @@ int process_exec(const uint8_t* image, size_t size) {
     g_exit_code = 0;
     g_have_jmp = 1;
 
-    if (process_setjmp(g_jmpbuf) == 0) {
-        /* First return from setjmp: jump into userspace */
+        if (process_setjmp(g_jmpbuf) == 0) {
+        /* Enter ring 3 via IRET: SS ESP EFLAGS CS EIP */
         uint32_t user_stack = ELF_LOAD_BASE + ELF_LOAD_MAX - 16;
+        static uint8_t ring0_stack[8192] __attribute__((aligned(16)));
+        tss_set_kernel_stack((uint32_t)(ring0_stack + sizeof(ring0_stack)));
+
+        uint32_t user_cs = 0x1B;
+        uint32_t user_ss = 0x23;
+        uint32_t eflags  = 0x202;
+
         __asm__ volatile(
-            "mov %0, %%esp\n"
-            "xor %%ebp, %%ebp\n"
-            "jmp *%1\n"
+            "mov $0x23, %%ax\n\t"
+            "mov %%ax, %%ds\n\t"
+            "mov %%ax, %%es\n\t"
+            "mov %%ax, %%fs\n\t"
+            "mov %%ax, %%gs\n\t"
+            "pushl %0\n\t"
+            "pushl %1\n\t"
+            "pushl %2\n\t"
+            "pushl %3\n\t"
+            "pushl %4\n\t"
+            "iret\n\t"
             :
-            : "r"(user_stack), "r"(entry)
-            : "memory"
+            : "r"(user_ss), "r"(user_stack), "r"(eflags), "r"(user_cs), "r"(entry)
+            : "memory", "eax"
         );
-        /* never reached */
         for (;;) __asm__ volatile ("hlt");
     }
+
 
     /* Second return: from process_longjmp in sys_exit */
     g_have_jmp = 0;

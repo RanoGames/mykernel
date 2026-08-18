@@ -2,6 +2,7 @@
 
 #include "fs.h"
 #include "vga.h"
+#include "atomic.h"
 
 #define FS_MAX_NODES 256
 #define FS_ROOT_INDEX 0
@@ -23,6 +24,33 @@ struct fs_node {
 
 static struct fs_node nodes[FS_MAX_NODES];
 static int cwd;
+
+/* ---- FS lock: spinlock (atomic xchg) + nestable cli ---- */
+static spinlock_t fs_spinlock;
+static int fs_lock_depth;
+static uint32_t fs_if_was_on;
+
+static void fs_lock(void) {
+    uint32_t flags;
+    __asm__ volatile ("pushf; pop %0; cli" : "=r"(flags));
+    if (fs_lock_depth == 0) {
+        fs_if_was_on = flags & 0x200;
+        spin_lock(&fs_spinlock);
+    }
+    fs_lock_depth++;
+}
+
+static void fs_unlock(void) {
+    if (fs_lock_depth <= 0) return;
+    fs_lock_depth--;
+    if (fs_lock_depth == 0) {
+        spin_unlock(&fs_spinlock);
+        if (fs_if_was_on)
+            __asm__ volatile ("sti");
+    }
+}
+
+/* Use for short critical sections in mutators */
 
 static size_t k_strlen(const char* s) {
     size_t n = 0;
@@ -55,6 +83,8 @@ static void k_memcpy(void* d, const void* s, size_t n) {
 }
 
 void fs_init(void) {
+    fs_lock_depth = 0;
+    spin_init(&fs_spinlock);
     for (int i = 0; i < FS_MAX_NODES; i++)
         nodes[i].type = FS_TYPE_FREE;
 
@@ -96,110 +126,156 @@ static int fs_is_valid_name(const char* name) {
 }
 
 enum fs_result fs_mkdir(const char* name) {
-    if (!fs_is_valid_name(name)) return FS_ERR_INVALID_NAME;
-    if (fs_find_child(cwd, name) != -1) return FS_ERR_ALREADY_EXISTS;
+    fs_lock();
+    enum fs_result r = FS_OK;
+    if (!fs_is_valid_name(name)) { r = FS_ERR_INVALID_NAME; goto out; }
+    if (fs_find_child(cwd, name) != -1) { r = FS_ERR_ALREADY_EXISTS; goto out; }
     int idx = fs_alloc_node();
-    if (idx == -1) return FS_ERR_NO_SPACE;
+    if (idx == -1) { r = FS_ERR_NO_SPACE; goto out; }
     nodes[idx].type = FS_TYPE_DIR;
     k_strcpy_truncate(nodes[idx].name, name, FS_NAME_MAX);
     nodes[idx].parent = cwd;
-    return FS_OK;
+out:
+    fs_unlock();
+    return r;
 }
 
 enum fs_result fs_touch(const char* name) {
-    if (!fs_is_valid_name(name)) return FS_ERR_INVALID_NAME;
-    if (fs_find_child(cwd, name) != -1) return FS_ERR_ALREADY_EXISTS;
+    fs_lock();
+    enum fs_result r = FS_OK;
+    if (!fs_is_valid_name(name)) { r = FS_ERR_INVALID_NAME; goto out; }
+    if (fs_find_child(cwd, name) != -1) { r = FS_ERR_ALREADY_EXISTS; goto out; }
     int idx = fs_alloc_node();
-    if (idx == -1) return FS_ERR_NO_SPACE;
+    if (idx == -1) { r = FS_ERR_NO_SPACE; goto out; }
     nodes[idx].type = FS_TYPE_FILE;
     k_strcpy_truncate(nodes[idx].name, name, FS_NAME_MAX);
     nodes[idx].parent = cwd;
     nodes[idx].content_len = 0;
     nodes[idx].content[0] = '\0';
-    return FS_OK;
+out:
+    fs_unlock();
+    return r;
 }
 
 enum fs_result fs_cd(const char* name) {
-    if (k_streq(name, ".")) return FS_OK;
+    fs_lock();
+    enum fs_result r = FS_OK;
+    if (k_streq(name, ".")) goto out;
     if (k_streq(name, "..")) {
         if (nodes[cwd].parent != -1)
             cwd = nodes[cwd].parent;
-        return FS_OK;
+        goto out;
     }
     if (k_streq(name, "/")) {
         cwd = FS_ROOT_INDEX;
-        return FS_OK;
+        goto out;
     }
     int idx = fs_find_child(cwd, name);
-    if (idx == -1) return FS_ERR_NOT_FOUND;
-    if (nodes[idx].type != FS_TYPE_DIR) return FS_ERR_NOT_A_DIRECTORY;
+    if (idx == -1) { r = FS_ERR_NOT_FOUND; goto out; }
+    if (nodes[idx].type != FS_TYPE_DIR) { r = FS_ERR_NOT_A_DIRECTORY; goto out; }
     cwd = idx;
-    return FS_OK;
+out:
+    fs_unlock();
+    return r;
 }
 
-/* Free node idx and all descendants (post-order). depth guards cycles. */
-static enum fs_result fs_rm_node_recursive(int idx, int depth) {
-    if (idx < 0 || idx >= FS_MAX_NODES) return FS_ERR_NOT_FOUND;
-    if (nodes[idx].type == FS_TYPE_FREE) return FS_OK;
-    if (idx == FS_ROOT_INDEX) return FS_ERR_INVALID_NAME; /* never delete / */
-    if (depth > FS_MAX_DEPTH) return FS_ERR_INVALID_NAME;
-
-    if (nodes[idx].type == FS_TYPE_DIR) {
-        /* Restart scan: removing children shifts logical tree */
-        int progress = 1;
-        while (progress) {
-            progress = 0;
-            for (int i = 0; i < FS_MAX_NODES; i++) {
-                if (nodes[i].type == FS_TYPE_FREE) continue;
-                if (nodes[i].parent != idx) continue;
-                enum fs_result r = fs_rm_node_recursive(i, depth + 1);
-                if (r != FS_OK) return r;
-                progress = 1;
-                break; /* restart from beginning after one removal */
-            }
-        }
-    }
-
-    /* If cwd was inside deleted subtree, jump to parent of idx or root */
-    int p = nodes[idx].parent;
-    int walk = cwd;
-    while (walk != -1) {
-        if (walk == idx) {
-            cwd = (p >= 0) ? p : FS_ROOT_INDEX;
-            break;
-        }
-        walk = nodes[walk].parent;
-    }
-
+/* Free one node slot (must already have no live children if not bulk-free). */
+static void fs_free_slot(int idx) {
     nodes[idx].type = FS_TYPE_FREE;
     nodes[idx].content_len = 0;
     nodes[idx].content[0] = '\0';
     nodes[idx].name[0] = '\0';
     nodes[idx].parent = -1;
+}
+
+/* True if cwd is idx or a descendant of idx. */
+static int fs_cwd_in_subtree(int idx) {
+    int walk = cwd;
+    while (walk != -1) {
+        if (walk == idx) return 1;
+        walk = nodes[walk].parent;
+    }
+    return 0;
+}
+
+/*
+ * Optimized subtree delete for large trees:
+ * 1) BFS collect all nodes in subtree (one scan fan-out, O(n) for n=FS_MAX_NODES)
+ * 2) Fix cwd once if inside tree
+ * 3) Free all collected slots (no per-child full rescan restart)
+ */
+static enum fs_result fs_rm_subtree(int root_idx) {
+    if (root_idx < 0 || root_idx >= FS_MAX_NODES) return FS_ERR_NOT_FOUND;
+    if (nodes[root_idx].type == FS_TYPE_FREE) return FS_OK;
+    if (root_idx == FS_ROOT_INDEX) return FS_ERR_INVALID_NAME;
+
+    int queue[FS_MAX_NODES];
+    int qh = 0, qt = 0;
+    uint8_t seen[FS_MAX_NODES];
+    for (int i = 0; i < FS_MAX_NODES; i++) seen[i] = 0;
+
+    queue[qt++] = root_idx;
+    seen[root_idx] = 1;
+
+    while (qh < qt) {
+        int u = queue[qh++];
+        if (nodes[u].type != FS_TYPE_DIR) continue;
+        for (int i = 0; i < FS_MAX_NODES; i++) {
+            if (nodes[i].type == FS_TYPE_FREE) continue;
+            if (nodes[i].parent != u) continue;
+            if (seen[i]) continue;
+            if (qt >= FS_MAX_NODES) return FS_ERR_NO_SPACE;
+            seen[i] = 1;
+            queue[qt++] = i;
+        }
+    }
+
+    if (fs_cwd_in_subtree(root_idx)) {
+        int p = nodes[root_idx].parent;
+        cwd = (p >= 0) ? p : FS_ROOT_INDEX;
+    }
+
+    /* Free in reverse BFS order (children before parents). */
+    for (int i = qt - 1; i >= 0; i--)
+        fs_free_slot(queue[i]);
+
     return FS_OK;
 }
 
 /* Non-recursive: files OK; empty dirs OK; non-empty dir → DIR_NOT_EMPTY */
 enum fs_result fs_rm(const char* name) {
-    if (!name || !name[0]) return FS_ERR_INVALID_NAME;
-    if (name[0] == '/' && name[1] == '\0') return FS_ERR_INVALID_NAME;
+    fs_lock();
+    enum fs_result r = FS_OK;
+    if (!name || !name[0]) { r = FS_ERR_INVALID_NAME; goto out; }
+    if (name[0] == '/' && name[1] == '\0') { r = FS_ERR_INVALID_NAME; goto out; }
     int idx = fs_find_child(cwd, name);
-    if (idx == -1) return FS_ERR_NOT_FOUND;
+    if (idx == -1) { r = FS_ERR_NOT_FOUND; goto out; }
     if (nodes[idx].type == FS_TYPE_DIR) {
-        for (int i = 0; i < FS_MAX_NODES; i++)
-            if (nodes[i].type != FS_TYPE_FREE && nodes[i].parent == idx)
-                return FS_ERR_DIR_NOT_EMPTY;
+        for (int i = 0; i < FS_MAX_NODES; i++) {
+            if (nodes[i].type != FS_TYPE_FREE && nodes[i].parent == idx) {
+                r = FS_ERR_DIR_NOT_EMPTY;
+                goto out;
+            }
+        }
     }
-    return fs_rm_node_recursive(idx, 0);
+    r = fs_rm_subtree(idx);
+out:
+    fs_unlock();
+    return r;
 }
 
-/* Recursive: rm -r — delete file or directory tree */
+/* Recursive: rm -r — delete file or entire directory tree */
 enum fs_result fs_rm_rf(const char* name) {
-    if (!name || !name[0]) return FS_ERR_INVALID_NAME;
-    if (name[0] == '/' && name[1] == '\0') return FS_ERR_INVALID_NAME;
+    fs_lock();
+    enum fs_result r = FS_OK;
+    if (!name || !name[0]) { r = FS_ERR_INVALID_NAME; goto out; }
+    if (name[0] == '/' && name[1] == '\0') { r = FS_ERR_INVALID_NAME; goto out; }
     int idx = fs_find_child(cwd, name);
-    if (idx == -1) return FS_ERR_NOT_FOUND;
-    return fs_rm_node_recursive(idx, 0);
+    if (idx == -1) { r = FS_ERR_NOT_FOUND; goto out; }
+    r = fs_rm_subtree(idx);
+out:
+    fs_unlock();
+    return r;
 }
 
 enum fs_result fs_write(const char* name, const char* text) {
@@ -207,39 +283,54 @@ enum fs_result fs_write(const char* name, const char* text) {
 }
 
 enum fs_result fs_write_bin(const char* name, const void* data, size_t len) {
-    if (len >= FS_FILE_MAX) return FS_ERR_TOO_BIG;
+    fs_lock();
+    enum fs_result r = FS_OK;
+    if (len >= FS_FILE_MAX) { r = FS_ERR_TOO_BIG; goto out; }
     int idx = fs_find_child(cwd, name);
     if (idx == -1) {
-        enum fs_result r = fs_touch(name);
-        if (r != FS_OK) return r;
+        fs_unlock(); /* touch takes its own lock */
+        r = fs_touch(name);
+        fs_lock();
+        if (r != FS_OK) goto out;
         idx = fs_find_child(cwd, name);
     }
-    if (nodes[idx].type != FS_TYPE_FILE) return FS_ERR_IS_A_DIRECTORY;
+    if (idx == -1) { r = FS_ERR_NOT_FOUND; goto out; }
+    if (nodes[idx].type != FS_TYPE_FILE) { r = FS_ERR_IS_A_DIRECTORY; goto out; }
     k_memcpy(nodes[idx].content, data, len);
     nodes[idx].content[len] = '\0';
     nodes[idx].content_len = len;
-    return FS_OK;
+out:
+    fs_unlock();
+    return r;
 }
 
+
 enum fs_result fs_append(const char* name, const char* text) {
+    fs_lock();
+    enum fs_result r = FS_OK;
     int idx = fs_find_child(cwd, name);
     if (idx == -1) {
-        enum fs_result r = fs_touch(name);
-        if (r != FS_OK) return r;
+        fs_unlock();
+        r = fs_touch(name);
+        fs_lock();
+        if (r != FS_OK) goto out;
         idx = fs_find_child(cwd, name);
     }
-    if (nodes[idx].type != FS_TYPE_FILE) return FS_ERR_IS_A_DIRECTORY;
-
+    if (idx == -1) { r = FS_ERR_NOT_FOUND; goto out; }
+    if (nodes[idx].type != FS_TYPE_FILE) { r = FS_ERR_IS_A_DIRECTORY; goto out; }
     size_t pos = nodes[idx].content_len;
-    if (pos > 0 && pos + 1 < FS_FILE_MAX)
+    if (pos > 0 && pos < FS_FILE_MAX - 1)
         nodes[idx].content[pos++] = '\n';
     size_t i = 0;
-    while (text[i] && pos + 1 < FS_FILE_MAX)
+    while (text[i] && pos < FS_FILE_MAX - 1)
         nodes[idx].content[pos++] = text[i++];
     nodes[idx].content[pos] = '\0';
     nodes[idx].content_len = pos;
-    return FS_OK;
+out:
+    fs_unlock();
+    return r;
 }
+
 
 enum fs_result fs_read(const char* name, const char** out_content, size_t* out_len) {
     int idx = fs_find_child(cwd, name);
@@ -327,30 +418,40 @@ enum fs_result fs_mkdir_p(const char* path) {
 }
 
 enum fs_result fs_cp(const char* src, const char* dst) {
+    fs_lock();
+    enum fs_result r = FS_OK;
     int sidx = fs_find_child(cwd, src);
-    if (sidx == -1) return FS_ERR_NOT_FOUND;
-    if (nodes[sidx].type != FS_TYPE_FILE) return FS_ERR_IS_A_DIRECTORY;
-    if (!fs_is_valid_name(dst)) return FS_ERR_INVALID_NAME;
-    if (fs_find_child(cwd, dst) != -1) return FS_ERR_ALREADY_EXISTS;
+    if (sidx == -1) { r = FS_ERR_NOT_FOUND; goto out; }
+    if (nodes[sidx].type != FS_TYPE_FILE) { r = FS_ERR_IS_A_DIRECTORY; goto out; }
+    if (!fs_is_valid_name(dst)) { r = FS_ERR_INVALID_NAME; goto out; }
+    if (fs_find_child(cwd, dst) != -1) { r = FS_ERR_ALREADY_EXISTS; goto out; }
     int didx = fs_alloc_node();
-    if (didx == -1) return FS_ERR_NO_SPACE;
+    if (didx == -1) { r = FS_ERR_NO_SPACE; goto out; }
     nodes[didx].type = FS_TYPE_FILE;
     k_strcpy_truncate(nodes[didx].name, dst, FS_NAME_MAX);
     nodes[didx].parent = cwd;
     k_memcpy(nodes[didx].content, nodes[sidx].content, nodes[sidx].content_len);
     nodes[didx].content_len = nodes[sidx].content_len;
     nodes[didx].content[nodes[didx].content_len] = '\0';
-    return FS_OK;
+out:
+    fs_unlock();
+    return r;
 }
 
+
 enum fs_result fs_mv(const char* src, const char* dst) {
+    fs_lock();
+    enum fs_result r = FS_OK;
     int sidx = fs_find_child(cwd, src);
-    if (sidx == -1) return FS_ERR_NOT_FOUND;
-    if (!fs_is_valid_name(dst)) return FS_ERR_INVALID_NAME;
-    if (fs_find_child(cwd, dst) != -1) return FS_ERR_ALREADY_EXISTS;
+    if (sidx == -1) { r = FS_ERR_NOT_FOUND; goto out; }
+    if (!fs_is_valid_name(dst)) { r = FS_ERR_INVALID_NAME; goto out; }
+    if (fs_find_child(cwd, dst) != -1) { r = FS_ERR_ALREADY_EXISTS; goto out; }
     k_strcpy_truncate(nodes[sidx].name, dst, FS_NAME_MAX);
-    return FS_OK;
+out:
+    fs_unlock();
+    return r;
 }
+
 
 enum fs_result fs_size(const char* name, size_t* out_size) {
     int idx = fs_find_child(cwd, name);
@@ -433,14 +534,14 @@ void fs_pwd(char* buffer, size_t buffer_size) {
 const char* fs_strerror(enum fs_result err) {
     switch (err) {
         case FS_OK: return "OK";
-        case FS_ERR_NOT_FOUND: return "no such file or directory";
-        case FS_ERR_ALREADY_EXISTS: return "already exists";
-        case FS_ERR_NOT_A_DIRECTORY: return "not a directory";
-        case FS_ERR_IS_A_DIRECTORY: return "is a directory, not a file";
-        case FS_ERR_NO_SPACE: return "no space left";
-        case FS_ERR_DIR_NOT_EMPTY: return "directory not empty";
-        case FS_ERR_INVALID_NAME: return "invalid name";
-        case FS_ERR_TOO_BIG: return "file too big";
-        default: return "unknown error";
+        case FS_ERR_NOT_FOUND: return "No such file or directory";
+        case FS_ERR_ALREADY_EXISTS: return "Already exists";
+        case FS_ERR_NOT_A_DIRECTORY: return "Not a directory";
+        case FS_ERR_IS_A_DIRECTORY: return "Is a directory, not a file";
+        case FS_ERR_NO_SPACE: return "No space left";
+        case FS_ERR_DIR_NOT_EMPTY: return "Directory not empty";
+        case FS_ERR_INVALID_NAME: return "Invalid name";
+        case FS_ERR_TOO_BIG: return "File too big";
+        default: return "Unknown error";
     }
 }

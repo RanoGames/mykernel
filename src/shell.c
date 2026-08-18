@@ -5,9 +5,15 @@
 #include "power.h"
 #include "keyboard.h"
 #include "fs.h"
+#include "vfs.h"
+#include "install.h"
+#include "part.h"
+#include "fat32.h"
+#include "net.h"
 #include "calc.h"
 #include "process.h"
 #include "fat32.h"
+#include "net.h"
 #include "kmalloc.h"
 #include "mlang.h"
 #include "sched.h"
@@ -166,7 +172,7 @@ static void read_line(char* buffer, size_t max_len) {
             static const char* cmds[] = {
                 "help","clear","echo","about","uname","whoami","free","history",
                 "reboot","shutdown","calc","ls","pwd","cd","mkdir","touch","cat",
-                "rm","write","append","cp","mv","fatmount","fatinfo","fatls","fatcat",
+                "rm","write","append","cp","mv","mount","umount","fatmount","fatinfo","fatls","fatcat",
                 "fatwrite","lang","ps","spawn","snake","pong","beep","lspci","beep97",
                 "exec","settings","vbetest","dynhello","desktop",0
             };
@@ -262,18 +268,121 @@ static void print_fat_error(enum fat_result err) {
     terminal_putchar('\n');
 }
 
+
+static void cmd_mount(const char* arg) {
+    /* mount          — list
+     * mount fat /mnt — mount FAT32 at /mnt
+     * mount ram /tmp — mark RAM path (already root)
+     */
+    while (arg[0] == ' ') arg++;
+    if (arg[0] == '\0') {
+        vfs_list();
+        return;
+    }
+    /* parse: <type> <path> */
+    char type[16];
+    int i = 0;
+    while (arg[0] && arg[0] != ' ' && i < 15) type[i++] = *arg++;
+    type[i] = 0;
+    while (arg[0] == ' ') arg++;
+    if (arg[0] == '\0') {
+        terminal_writestring("Usage: mount [fat|ram] <path>\n");
+        terminal_writestring("       mount          (list mounts)\n");
+        return;
+    }
+    enum vfs_fs_type ty = VFS_FS_NONE;
+    if (type[0]=='f' && type[1]=='a') ty = VFS_FS_FAT32;
+    else if (type[0]=='r' && type[1]=='a') ty = VFS_FS_RAM;
+    else {
+        terminal_writestring("Unknown FS type (use fat or ram)\n");
+        return;
+    }
+    enum fs_result r = vfs_mount(arg, ty);
+    if (r != FS_OK) {
+        terminal_writestring("mount: ");
+        terminal_writestring(fs_strerror(r));
+        terminal_putchar('\n');
+    } else {
+        terminal_writestring("Mounted.\n");
+        vfs_list();
+    }
+}
+
+static void cmd_umount(const char* arg) {
+    while (arg[0] == ' ') arg++;
+    if (arg[0] == '\0') {
+        terminal_writestring("Usage: umount <path>\n");
+        return;
+    }
+    enum fs_result r = vfs_umount(arg);
+    if (r != FS_OK) {
+        terminal_writestring("umount: ");
+        terminal_writestring(fs_strerror(r));
+        terminal_putchar('\n');
+    } else {
+        terminal_writestring("Unmounted.\n");
+    }
+}
+
+
+static void cmd_fatmkdir(const char* arg) {
+    while (arg[0]==' ') arg++;
+    if (!arg[0]) { terminal_writestring("Usage: fatmkdir <name>\n"); return; }
+    enum fat_result r = fat32_mkdir(arg);
+    if (r != FAT_OK) { terminal_writestring(fat_strerror(r)); terminal_putchar('\n'); }
+}
+static void cmd_fatrm(const char* arg) {
+    while (arg[0]==' ') arg++;
+    if (!arg[0]) { terminal_writestring("Usage: fatrm <name>\n"); return; }
+    enum fat_result r = fat32_unlink(arg);
+    if (r != FAT_OK) { terminal_writestring(fat_strerror(r)); terminal_putchar('\n'); }
+}
+static void cmd_fdisk(const char* arg) {
+    (void)arg;
+    part_print_mbr();
+}
+static void cmd_mkfs(const char* arg) {
+    (void)arg;
+    terminal_writestring("Formatting partition LBA 2048 (128MiB)...\n");
+    enum fat_result r = fat32_mkfs(2048, 262144);
+    if (r != FAT_OK) terminal_writestring(fat_strerror(r));
+    else terminal_writestring("mkfs OK. Run: fatmount\n");
+    terminal_putchar('\n');
+}
+static void cmd_install(const char* arg) {
+    (void)arg;
+    install_wizard();
+}
+
+
+static void cmd_ping(const char* arg) {
+    while (arg[0]==' ') arg++;
+    char host[64];
+    int i = 0;
+    while (arg[0] && arg[0] != ' ' && i < 63) host[i++] = *arg++;
+    host[i] = 0;
+    if (!host[0]) {
+        terminal_writestring("Usage: ping <host>   e.g. ping 127.0.0.1\n");
+        return;
+    }
+    net_ping(host, 4);
+}
 static void cmd_help(void) {
     terminal_writestring("System: help clear echo about uname whoami free history\n");
     terminal_writestring("        reboot shutdown calc <expr>\n");
-    terminal_writestring("RAM FS: ls pwd cd mkdir touch cat rm[-r] write append cp mv\n");
-    terminal_writestring("FAT32:  fatmount fatinfo fatls fatcat fatwrite\n");
+    terminal_writestring("RAM FS: ls pwd cd mkdir touch cat write append cp mv\n");
+    terminal_writestring("        rm <name> | rm -r <dir>   recursive delete\n");
+    terminal_writestring("VFS:    mount [fat|ram] <path> | umount <path> | mount\n");
+    terminal_writestring("FAT32:  fatmount fatinfo fatls fatcat fatwrite fatmkdir fatrm\n");
+    terminal_writestring("Net:    ping <host>   (loopback 127.0.0.1)\n");
+    terminal_writestring("Disk:   fdisk gpt mkfs install  |  boot: make disk.img\n");
     terminal_writestring("Lang:   lang | lang <file>\n");
-    terminal_writestring("Tasks:  ps  spawn\n");
-    terminal_writestring("Games:  snake  pong  beep [freq|err|coin]\n");
+    terminal_writestring("Tasks:  ps spawn\n");
+    terminal_writestring("Games:  snake pong beep [freq|err|coin]\n");
     terminal_writestring("GUI:    desktop\n");
-    terminal_writestring("PCI:    lspci  beep97 [freq]\n");
-    terminal_writestring("Programs: exec hello | exec dynhello\n");
-    terminal_writestring("Config: settings  vbetest\n");
+    terminal_writestring("PCI:    lspci beep97 [freq]\n");
+    terminal_writestring("Programs: exec <name>   (example: exec hello)\n");
+    terminal_writestring("Config: settings vbetest\n");
 }
 
 static void cmd_reboot(void) {
@@ -639,9 +748,21 @@ static void execute_command(const char* line) {
     else if (str_equals(line, "beep97")) cmd_beep97("");
     else if (str_equals(line, "settings")) cmd_settings();
     else if (str_equals(line, "vbetest")) cmd_vbetest();
+    else if (str_equals(line, "mount")) cmd_mount("");
+    else if (str_starts_with(line, "mount ")) cmd_mount(line + 6);
+    else if (str_starts_with(line, "umount ")) cmd_umount(line + 7);
+    else if (str_equals(line, "umount")) cmd_umount("");
+    else if (str_equals(line, "install")) cmd_install("");
+    else if (str_equals(line, "fdisk")) cmd_fdisk("");
+    else if (str_equals(line, "gpt")) part_print_gpt();
+    else if (str_equals(line, "mkfs")) cmd_mkfs("");
+    else if (str_starts_with(line, "fatmkdir ")) cmd_fatmkdir(line + 9);
+    else if (str_starts_with(line, "fatrm ")) cmd_fatrm(line + 6);
+    else if (str_starts_with(line, "ping ")) cmd_ping(line + 5);
+    else if (str_equals(line, "ping")) cmd_ping("");
     else if (str_equals(line, "desktop")) cmd_desktop();
     else {
-        terminal_writestring("Unknown: ");
+        terminal_writestring("Unknown command: ");
         terminal_writestring(line);
         terminal_writestring("\nType 'help'\n");
     }

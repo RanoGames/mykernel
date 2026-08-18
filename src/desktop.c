@@ -55,6 +55,7 @@ static int id_tasks = -1;
 static int id_notes = -1;
 static int id_help = -1;
 static int id_trash = -1;
+static int id_demo = -1;
 
 static int start_open;
 static int calc_acc, calc_val, calc_op; /* op: 0 none 1+ 2- 3* */
@@ -230,6 +231,17 @@ static void open_about(void)   { OPEN_APP(id_about, 300, 170, "About", paint_abo
 static void open_tasks(void)   { OPEN_APP(id_tasks, 300, 160, "Tasks", paint_tasks); }
 static void open_notes(void)   { OPEN_APP(id_notes, 280, 160, "Notes", paint_notes); }
 static void open_help(void)    { OPEN_APP(id_help, 320, 170, "Help", paint_help); }
+
+static void paint_demo(struct mk_surface* s) {
+    if (!s || !s->pixels) return;
+    mk_buf_fill(s->pixels, s->w, s->h, 0x001A1A2E);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 12, "Demo App", 0x00FFFFFF, 0x001A1A2E);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 40, "Ring3 + icons demo", 0x00AAAAFF, 0x001A1A2E);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 64, "Shell: exec hello", 0x00AAFFAA, 0x001A1A2E);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 88, "Shell: ping 127.0.0.1", 0x00AAFFAA, 0x001A1A2E);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 112, "Two windows on start", 0x00FFFFFF, 0x001A1A2E);
+}
+static void open_demo(void) { OPEN_APP(id_demo, 340, 160, "Demo", paint_demo); }
 static void open_trash(void)   { OPEN_APP(id_trash, 300, 170, "Recycle Bin", paint_trash); }
 
 static void on_close_id(int id) {
@@ -242,6 +254,7 @@ static void on_close_id(int id) {
     if (id == id_notes) id_notes = -1;
     if (id == id_help) id_help = -1;
     if (id == id_trash) id_trash = -1;
+    if (id == id_demo) id_demo = -1;
 }
 
 /* ---- desktop icons ----
@@ -272,6 +285,7 @@ static struct desk_icon icons[] = {
     { 100, 118, 0, "Notes",    open_notes },
     { 100, 188, 0, "Help",     open_help },
     { 100, 258, 0, "Welcome",  open_welcome },
+    { 180, 48,  0, "Demo",     open_demo },
     { -1,  -1,  1, "Recycle",  open_trash }, /* bottom-right */
 };
 #define N_ICONS ((int)(sizeof(icons) / sizeof(icons[0])))
@@ -447,13 +461,14 @@ void desktop_run(void) {
     start_open = 0;
     calc_acc = calc_val = calc_op = 0;
     id_welcome = id_clock = id_sysinfo = id_calc = -1;
-    id_about = id_tasks = id_notes = id_help = id_trash = -1;
+    id_about = id_tasks = id_notes = id_help = id_trash = id_demo = -1;
 
     mk_set_desktop_layer(desktop_layer_paint);
     mk_set_desktop_overlay(desktop_overlay_paint);
 
     open_welcome();
     open_clock();
+    /* two+ windows: welcome, clock; Demo via icon */
     /* park windows right side so icons stay visible */
     if (surface_alive(id_welcome)) mk_surface_move(id_welcome, 200, 40);
     if (surface_alive(id_clock)) mk_surface_move(id_clock, 520, 40);
