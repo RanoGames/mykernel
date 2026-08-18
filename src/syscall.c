@@ -11,11 +11,16 @@
 #include "fs.h"
 #include "sched.h"
 #include "timer.h"
+#include "kmalloc.h"
 #include <stdint.h>
 #include <stddef.h>
 
 #define USER_HEAP_BASE 0x500000u
 #define USER_HEAP_MAX  0x600000u
+/* Anonymous mmap arena for glibc (separate from brk) */
+#define MMAP_BASE      0x01000000u
+#define MMAP_END       0x02000000u /* 16 MiB */
+#define PAGE_SIZE      4096u
 #define FD_MAX 32
 
 struct kernel_stat {
@@ -61,9 +66,16 @@ struct fd_entry {
 
 static struct fd_entry fds[FD_MAX];
 static uint32_t user_brk = USER_HEAP_BASE;
+static uint32_t mmap_bump = MMAP_BASE;
+static uint32_t g_umask = 0022;
+static uint32_t tls_base = 0;
+static uint32_t tls_entry = 6;
 static uint32_t g_boot_epoch = 1700000000u;
 
-void user_heap_reset(void) { user_brk = USER_HEAP_BASE; }
+void user_heap_reset(void) {
+    user_brk = USER_HEAP_BASE;
+    mmap_bump = MMAP_BASE;
+}
 
 void fd_table_reset(void) {
     for (int i = 0; i < FD_MAX; i++) {
@@ -286,6 +298,245 @@ static int sys_time(uint32_t* tloc) {
     return (int)t;
 }
 
+
+/* ---- extra Linux-ish syscalls ---- */
+
+struct mk_utsname {
+    char sysname[65];
+    char nodename[65];
+    char release[65];
+    char version[65];
+    char machine[65];
+};
+
+struct mk_timeval {
+    int32_t tv_sec;
+    int32_t tv_usec;
+};
+
+struct mk_timezone {
+    int32_t tz_minuteswest;
+    int32_t tz_dsttime;
+};
+
+struct mk_sysinfo {
+    int32_t uptime;
+    uint32_t loads[3];
+    uint32_t totalram;
+    uint32_t freeram;
+    uint32_t sharedram;
+    uint32_t bufferram;
+    uint32_t totalswap;
+    uint32_t freeswap;
+    uint16_t procs;
+    uint16_t pad;
+    uint32_t totalhigh;
+    uint32_t freehigh;
+    uint32_t mem_unit;
+    char _f[20-2*sizeof(uint32_t)-sizeof(uint32_t)];
+};
+
+struct mk_iovec {
+    void* iov_base;
+    uint32_t iov_len;
+};
+
+static void cpy_str(char* d, const char* s, size_t n) {
+    size_t i = 0;
+    while (s[i] && i + 1 < n) { d[i] = s[i]; i++; }
+    d[i] = 0;
+    while (i < n) d[i++] = 0;
+}
+
+static int sys_uname(struct mk_utsname* u) {
+    if (!u) return -EFAULT;
+    cpy_str(u->sysname, "MyKernel", 65);
+    cpy_str(u->nodename, "mykernel", 65);
+    cpy_str(u->release, "0.2.0", 65);
+    cpy_str(u->version, "hobby", 65);
+    cpy_str(u->machine, "i686", 65);
+    return 0;
+}
+
+static int sys_gettimeofday(struct mk_timeval* tv, struct mk_timezone* tz) {
+    (void)tz;
+    if (!tv) return -EFAULT;
+    uint32_t t = g_boot_epoch + timer_ticks() / 100;
+    tv->tv_sec = (int32_t)t;
+    tv->tv_usec = (int32_t)((timer_ticks() % 100) * 10000u);
+    return 0;
+}
+
+static int sys_sysinfo(struct mk_sysinfo* info) {
+    if (!info) return -EFAULT;
+    size_t used = 0, total = 0, free_b = 0;
+    kmalloc_stats(&used, &total, &free_b);
+    info->uptime = (int32_t)(timer_ticks() / 100);
+    info->loads[0] = info->loads[1] = info->loads[2] = 0;
+    info->totalram = (uint32_t)total;
+    info->freeram = (uint32_t)free_b;
+    info->sharedram = 0;
+    info->bufferram = 0;
+    info->totalswap = 0;
+    info->freeswap = 0;
+    info->procs = 1;
+    info->pad = 0;
+    info->totalhigh = 0;
+    info->freehigh = 0;
+    info->mem_unit = 1;
+    return 0;
+}
+
+static int sys_writev(int fd, const struct mk_iovec* iov, int iovcnt) {
+    if (iovcnt < 0 || iovcnt > 64) return -EINVAL;
+    if (!iov && iovcnt) return -EFAULT;
+    int total = 0;
+    for (int i = 0; i < iovcnt; i++) {
+        if (!iov[i].iov_base && iov[i].iov_len) return -EFAULT;
+        int n = sys_write(fd, (const char*)iov[i].iov_base, (int)iov[i].iov_len);
+        if (n < 0) return n;
+        total += n;
+        if ((uint32_t)n < iov[i].iov_len) break;
+    }
+    return total;
+}
+
+static int sys_readv(int fd, const struct mk_iovec* iov, int iovcnt) {
+    if (iovcnt < 0 || iovcnt > 64) return -EINVAL;
+    if (!iov && iovcnt) return -EFAULT;
+    int total = 0;
+    for (int i = 0; i < iovcnt; i++) {
+        if (!iov[i].iov_base && iov[i].iov_len) return -EFAULT;
+        int n = sys_read(fd, (char*)iov[i].iov_base, (int)iov[i].iov_len);
+        if (n < 0) return n;
+        total += n;
+        if ((uint32_t)n < iov[i].iov_len) break;
+    }
+    return total;
+}
+
+
+
+static uint32_t align_up_page(uint32_t n) {
+    return (n + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
+}
+
+/* Linux i386 mmap2: offset is in pages */
+static int sys_mmap2(uint32_t addr, uint32_t len, uint32_t prot, uint32_t flags,
+                     int fd, uint32_t pgoff) {
+    (void)prot;
+    (void)pgoff;
+    if (len == 0) return -EINVAL;
+    len = align_up_page(len);
+    if (len > (MMAP_END - MMAP_BASE)) return -ENOMEM;
+
+    if (flags & MAP_ANONYMOUS) {
+        uint32_t base;
+        if ((flags & MAP_FIXED) && addr) {
+            if (addr < MMAP_BASE || addr + len > MMAP_END) return -EINVAL;
+            base = addr;
+        } else {
+            if (mmap_bump + len > MMAP_END) return -ENOMEM;
+            base = mmap_bump;
+            mmap_bump += len;
+        }
+        uint8_t* p = (uint8_t*)base;
+        for (uint32_t i = 0; i < len; i++) p[i] = 0;
+        return (int)base;
+    }
+
+    /* file-backed: not really mapped — return ENOSYS for now unless fd is dummy */
+    (void)fd;
+    return -ENOSYS;
+}
+
+static int sys_munmap(uint32_t addr, uint32_t len) {
+    (void)addr;
+    (void)len;
+    /* bump allocator: cannot free mid-arena; accept success for glibc */
+    return 0;
+}
+
+static int sys_mprotect(uint32_t addr, uint32_t len, uint32_t prot) {
+    (void)addr; (void)len; (void)prot;
+    return 0; /* no paging yet */
+}
+
+static int sys_madvise(uint32_t addr, uint32_t len, int advice) {
+    (void)addr; (void)len; (void)advice;
+    return 0;
+}
+
+struct user_desc {
+    uint32_t entry_number;
+    uint32_t base_addr;
+    uint32_t limit;
+    uint32_t flags; /* bitfield packed by userspace; we only use base */
+};
+
+static int sys_set_thread_area(struct user_desc* u) {
+    if (!u) return -EFAULT;
+    if (u->entry_number == (uint32_t)-1)
+        u->entry_number = tls_entry;
+    tls_base = u->base_addr;
+    /* Real kernel would load GDT TLS; we record base for future */
+    return 0;
+}
+
+static int sys_get_thread_area(struct user_desc* u) {
+    if (!u) return -EFAULT;
+    u->base_addr = tls_base;
+    u->entry_number = tls_entry;
+    u->limit = 0xfffff;
+    return 0;
+}
+
+static int sys_pipe(int* pipefd) {
+    if (!pipefd) return -EFAULT;
+    /* No real pipes yet */
+    return -ENOSYS;
+}
+
+static int sys_futex(uint32_t* uaddr, int op, uint32_t val, void* timeout,
+                     uint32_t* uaddr2, uint32_t val3) {
+    (void)uaddr; (void)val; (void)timeout; (void)uaddr2; (void)val3;
+    int cmd = op & 0x7f; /* strip private/clock flags */
+    /* FUTEX_WAIT=0 FUTEX_WAKE=1 — pretend success so single-threaded glibc lives */
+    if (cmd == 0) return 0;      /* WAIT: no contention */
+    if (cmd == 1) return 0;      /* WAKE */
+    return -ENOSYS;
+}
+
+static int sys_getrlimit(uint32_t resource, uint32_t* rlim) {
+    (void)resource;
+    if (!rlim) return -EFAULT;
+    /* rlim_cur, rlim_max as two uint32 (older i386) or uint64 — write soft=RLIM */
+    rlim[0] = 0xffffffffu;
+    rlim[1] = 0xffffffffu;
+    return 0;
+}
+
+static int sys_prctl(int option, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5) {
+    (void)a2; (void)a3; (void)a4; (void)a5;
+    if (option == 15 /* PR_GET_NAME */ || option == 4 /* PR_SET_NAME */)
+        return 0;
+    return -ENOSYS;
+}
+
+static int sys_clock_getres(int clk, uint32_t* ts) {
+    (void)clk;
+    if (!ts) return -EFAULT;
+    ts[0] = 0;
+    ts[1] = 10000000u; /* 10 ms in ns */
+    return 0;
+}
+
+static int sys_getdents64(int fd, void* dirp, uint32_t count) {
+    (void)fd; (void)dirp; (void)count;
+    return -ENOSYS; /* until FS dirents wired */
+}
+
+
 void syscall_handler(struct registers* regs) {
     uint32_t num = regs->eax;
     int ret = -ENOSYS;
@@ -329,10 +580,14 @@ void syscall_handler(struct registers* regs) {
         case SYS_GETPPID:
             ret = 0;
             break;
-        case SYS_GETUID:
-        case SYS_GETEUID:
-        case SYS_GETGID:
-        case SYS_GETEGID:
+        case 24: /* getuid */
+        case 47: /* getgid */
+        case 49: /* geteuid */
+        case 50: /* getegid */
+        case 199:
+        case 200:
+        case 201:
+        case 202:
             ret = 0;
             break;
         case SYS_CHDIR:
@@ -396,13 +651,121 @@ void syscall_handler(struct registers* regs) {
         case SYS_SYMLINK:
         case SYS_READLINK:
         case SYS_MMAP:
+            /* old mmap: treat like mmap2 with offset bytes->pages if needed */
+            ret = sys_mmap2(regs->ebx, regs->ecx, regs->edx, regs->esi, (int)regs->edi, regs->ebp / 4096u);
+            break;
+        case SYS_MMAP2:
+            ret = sys_mmap2(regs->ebx, regs->ecx, regs->edx, regs->esi, (int)regs->edi, regs->ebp);
+            break;
         case SYS_MUNMAP:
-        case SYS_KILL:
-        case SYS_SIGACTION:
-        case SYS_SELECT:
+            ret = sys_munmap(regs->ebx, regs->ecx);
+            break;
+        case SYS_MPROTECT:
+            ret = sys_mprotect(regs->ebx, regs->ecx, regs->edx);
+            break;
+        case SYS_MADVISE:
+        case SYS_MREMAP:
+            ret = sys_madvise(regs->ebx, regs->ecx, (int)regs->edx);
+            break;
+        case SYS_MSYNC:
+        case SYS_MLOCK:
+        case SYS_MUNLOCK:
+        case SYS_MLOCKALL:
+        case SYS_MUNLOCKALL:
+            ret = 0;
+            break;
+
+        case SYS_UNAME:
+            ret = sys_uname((struct mk_utsname*)regs->ebx);
+            break;
+        case SYS_GETTIMEOFDAY:
+            ret = sys_gettimeofday((struct mk_timeval*)regs->ebx, (struct mk_timezone*)regs->ecx);
+            break;
+        case SYS_SYSINFO:
+            ret = sys_sysinfo((struct mk_sysinfo*)regs->ebx);
+            break;
+        case SYS_WRITEV:
+            ret = sys_writev((int)regs->ebx, (const struct mk_iovec*)regs->ecx, (int)regs->edx);
+            break;
+        case SYS_READV:
+            ret = sys_readv((int)regs->ebx, (const struct mk_iovec*)regs->ecx, (int)regs->edx);
+            break;
+        case SYS_SYNC:
+            ret = 0;
+            break;
+        case SYS_CLOCK_NANOSLEEP:
+            /* treat as yield + short sleep */
+            timer_busy_ms(10);
+            ret = 0;
+            break;
+
+        case SYS_SET_THREAD_AREA:
+            ret = sys_set_thread_area((struct user_desc*)regs->ebx);
+            break;
+        case SYS_GET_THREAD_AREA:
+            ret = sys_get_thread_area((struct user_desc*)regs->ebx);
+            break;
+        case SYS_FUTEX:
+            ret = sys_futex((uint32_t*)regs->ebx, (int)regs->ecx, regs->edx,
+                            (void*)regs->esi, (uint32_t*)regs->edi, regs->ebp);
+            break;
+        case SYS_PIPE2:
+            ret = sys_pipe((int*)regs->ebx);
+            break;
+        case SYS_GETRLIMIT:
+        case SYS_UGETRLIMIT:
+            ret = sys_getrlimit(regs->ebx, (uint32_t*)regs->ecx);
+            break;
+        case SYS_SETRLIMIT:
+            ret = 0;
+            break;
+        case SYS_PRCTL:
+            ret = sys_prctl((int)regs->ebx, regs->ecx, regs->edx, regs->esi, regs->edi);
+            break;
+        case SYS_CLOCK_GETRES:
+            ret = sys_clock_getres((int)regs->ebx, (uint32_t*)regs->ecx);
+            break;
+        case SYS_GETDENTS64:
         case SYS_GETDENTS:
-        case SYS_REBOOT:
+            ret = sys_getdents64((int)regs->ebx, (void*)regs->ecx, regs->edx);
+            break;
+        case SYS_RT_SIGPROCMASK:
+        case SYS_SIGPROCMASK:
+        case SYS_RT_SIGACTION:
+        case SYS_SIGACTION:
+            ret = 0; /* single-threaded: pretend OK */
+            break;
+        case SYS_UMASK:
+            {
+                uint32_t old = g_umask;
+                if (regs->ebx != (uint32_t)-1)
+                    g_umask = regs->ebx & 0777;
+                ret = (int)old;
+            }
+            break;
+        case SYS_PAUSE:
+            ret = -EINTR;
+            break;
+        case SYS_ALARM:
+            ret = 0;
+            break;
+        case SYS_TIMES:
+            ret = (int)timer_ticks();
+            break;
+        case SYS_GETPGID:
+        case SYS_GETSID:
+            ret = 1;
+            break;
+        case SYS_TGKILL:
+        case SYS_KILL:
             ret = -ENOSYS;
+            break;
+        case SYS_OPENAT:
+            ret = sys_open((const char*)regs->ecx, (int)regs->edx);
+            break;
+        case SYS_POLL:
+        case SYS_SELECT:
+            ret = 0;
             break;
         default:
             ret = -ENOSYS;
