@@ -1,4 +1,4 @@
-/* desktop.c — простой рабочий стол: обои, панель, окно, курсор, drag */
+/* desktop.c — desktop with Welcome, Clock, SysInfo apps */
 
 #include "desktop.h"
 #include "mkdisp.h"
@@ -7,42 +7,173 @@
 #include "mouse.h"
 #include "keyboard.h"
 #include "vga.h"
-#include "platform.h"
-#include "power.h"
 #include "gfx.h"
 #include "timer.h"
-#include "settings.h"
+#include "platform.h"
+#include "power.h"
+#include "sched.h"
+
+static void u32_to_str(uint32_t v, char* out) {
+    char tmp[12];
+    int n = 0;
+    if (v == 0) { out[0] = '0'; out[1] = 0; return; }
+    while (v && n < 11) { tmp[n++] = (char)('0' + (v % 10)); v /= 10; }
+    int i = 0;
+    while (n) out[i++] = tmp[--n];
+    out[i] = 0;
+}
+
+static void format_uptime(char* buf, uint32_t ticks, uint32_t hz) {
+    if (hz == 0) hz = 100;
+    uint32_t sec = ticks / hz;
+    uint32_t m = sec / 60;
+    uint32_t s = sec % 60;
+    uint32_t h = m / 60;
+    m = m % 60;
+    /* H:MM:SS */
+    char th[12], tm[12], ts[12];
+    u32_to_str(h, th);
+    u32_to_str(m, tm);
+    u32_to_str(s, ts);
+    int i = 0, j;
+    for (j = 0; th[j]; j++) buf[i++] = th[j];
+    buf[i++] = ':';
+    if (m < 10) buf[i++] = '0';
+    for (j = 0; tm[j]; j++) buf[i++] = tm[j];
+    buf[i++] = ':';
+    if (s < 10) buf[i++] = '0';
+    for (j = 0; ts[j]; j++) buf[i++] = ts[j];
+    buf[i] = 0;
+}
 
 static void paint_welcome(struct mk_surface* s) {
     if (!s || !s->pixels) return;
     mk_buf_fill(s->pixels, s->w, s->h, 0x00F0F0F0);
-    mk_buf_rect(s->pixels, s->w, s->h, 0, 0, s->w, 4, 0x00007ACC);
-    mk_buf_text(s->pixels, s->w, s->h, 16, 20,
+    mk_buf_text(s->pixels, s->w, s->h, 12, 12,
                 "Welcome to MyKernel Desktop", 0x00000000, 0x00F0F0F0);
-    mk_buf_text(s->pixels, s->w, s->h, 16, 44,
-                "This is a Wayland-inspired compositor", 0x00333333, 0x00F0F0F0);
-    mk_buf_text(s->pixels, s->w, s->h, 16, 64,
-                "running inside the kernel.", 0x00333333, 0x00F0F0F0);
-    mk_buf_text(s->pixels, s->w, s->h, 16, 96,
-                "- Drag the blue title bar to move", 0x00000000, 0x00F0F0F0);
-    mk_buf_text(s->pixels, s->w, s->h, 16, 116,
-                "- Click red X to close this window", 0x00000000, 0x00F0F0F0);
-    mk_buf_text(s->pixels, s->w, s->h, 16, 136,
-                "- Press ESC to leave the desktop", 0x00000000, 0x00F0F0F0);
-    mk_buf_text(s->pixels, s->w, s->h, 16, 168,
-                "Linux Wayland apps will NOT run here yet.", 0x00AA0000, 0x00F0F0F0);
-    mk_buf_text(s->pixels, s->w, s->h, 16, 188,
-                "This is our own MK display protocol.", 0x00666666, 0x00F0F0F0);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 40,
+                "Drag title bar to move windows", 0x00000000, 0x00F0F0F0);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 60,
+                "Click X to close a window", 0x00000000, 0x00F0F0F0);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 80,
+                "Panel: Reboot / Shutdown", 0x00000000, 0x00F0F0F0);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 100,
+                "Click MyKernel button for apps", 0x00003399, 0x00F0F0F0);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 130,
+                "ESC or Q = leave desktop", 0x00000000, 0x00F0F0F0);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 160,
+                "Linux apps need more syscalls still", 0x00AA0000, 0x00F0F0F0);
+}
+
+static void paint_clock(struct mk_surface* s) {
+    if (!s || !s->pixels) return;
+    mk_buf_fill(s->pixels, s->w, s->h, 0x001A1A2E);
+    mk_buf_text(s->pixels, s->w, s->h, 16, 16,
+                "System Clock", 0x00E0E0FF, 0x001A1A2E);
+    char line[64];
+    char up[32];
+    format_uptime(up, timer_ticks(), timer_hz());
+    /* "Uptime  H:MM:SS" */
+    const char* p = "Uptime  ";
+    int i = 0;
+    while (*p) line[i++] = *p++;
+    p = up;
+    while (*p) line[i++] = *p++;
+    line[i] = 0;
+    mk_buf_text(s->pixels, s->w, s->h, 16, 56, line, 0x00FFFFFF, 0x001A1A2E);
+
+    char tbuf[32];
+    u32_to_str(timer_ticks(), tbuf);
+    i = 0; p = "Ticks   ";
+    while (*p) line[i++] = *p++;
+    p = tbuf;
+    while (*p) line[i++] = *p++;
+    line[i] = 0;
+    mk_buf_text(s->pixels, s->w, s->h, 16, 80, line, 0x00AAAAAA, 0x001A1A2E);
+
+    u32_to_str(timer_hz(), tbuf);
+    i = 0; p = "PIT Hz  ";
+    while (*p) line[i++] = *p++;
+    p = tbuf;
+    while (*p) line[i++] = *p++;
+    line[i] = 0;
+    mk_buf_text(s->pixels, s->w, s->h, 16, 104, line, 0x00AAAAAA, 0x001A1A2E);
+
+    mk_buf_text(s->pixels, s->w, s->h, 16, 140,
+                "Updates every second", 0x0066CCFF, 0x001A1A2E);
+}
+
+static void paint_sysinfo(struct mk_surface* s) {
+    if (!s || !s->pixels) return;
+    mk_buf_fill(s->pixels, s->w, s->h, 0x00F5F5F5);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 12,
+                "System Information", 0x00000000, 0x00F5F5F5);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 40,
+                "OS:     MyKernel", 0x00000000, 0x00F5F5F5);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 60,
+                "Arch:   i386", 0x00000000, 0x00F5F5F5);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 80,
+                "ABI:    int 0x80 (Linux-like)", 0x00000000, 0x00F5F5F5);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 100,
+                "Display: VBE LFB", 0x00000000, 0x00F5F5F5);
+
+    char line[48];
+    char n[16];
+    u32_to_str((uint32_t)sched_task_count(), n);
+    int i = 0;
+    const char* p = "Tasks:  ";
+    while (*p) line[i++] = *p++;
+    p = n;
+    while (*p) line[i++] = *p++;
+    line[i] = 0;
+    mk_buf_text(s->pixels, s->w, s->h, 12, 120, line, 0x00000000, 0x00F5F5F5);
+
+    mk_buf_text(s->pixels, s->w, s->h, 12, 150,
+                "Syscalls: uname, mmap2, futex...", 0x00333333, 0x00F5F5F5);
+    mk_buf_text(s->pixels, s->w, s->h, 12, 170,
+                "New: getrandom, nice, hostname", 0x00006600, 0x00F5F5F5);
+}
+
+/* Panel start button geometry (left side) */
+static void start_btn_rect(int* x, int* y, int* w, int* h) {
+    *x = 4;
+    *y = mk_screen_h() - 28 + 4;
+    *w = 72;
+    *h = 20;
+}
+
+static int open_clock(void) {
+    int id = mk_surface_create(280, 180, "Clock");
+    if (id < 0) return -1;
+    struct mk_surface* s = mk_surface_get(id);
+    if (s) {
+        s->x = 40;
+        s->y = 80;
+        paint_clock(s);
+        mk_surface_commit(id);
+    }
+    return id;
+}
+
+static int open_sysinfo(void) {
+    int id = mk_surface_create(340, 210, "SysInfo");
+    if (id < 0) return -1;
+    struct mk_surface* s = mk_surface_get(id);
+    if (s) {
+        s->x = 200;
+        s->y = 60;
+        paint_sysinfo(s);
+        mk_surface_commit(id);
+    }
+    return id;
 }
 
 void desktop_run(void) {
     if (platform_is_virtualbox()) {
         terminal_writestring("desktop: needs Bochs VBE (QEMU). Not supported on VirtualBox.\n");
-        terminal_writestring("Use QEMU for GUI, or snake/pong in Mode13 here.\n");
         return;
     }
 
-    /* Prefer 800x600; fall back to 640x480 */
     int mode = VBE_MODE_800x600;
     if (mk_init(mode) != 0) {
         mode = VBE_MODE_640x480;
@@ -52,11 +183,14 @@ void desktop_run(void) {
         }
     }
 
-    int win = mk_surface_create(420, 220, "Welcome");
+    int win = mk_surface_create(420, 200, "Welcome");
     if (win >= 0) {
         paint_welcome(mk_surface_get(win));
         mk_surface_commit(win);
     }
+
+    int clock_id = open_clock();
+    int sysinfo_id = open_sysinfo();
 
     mk_compose();
 
@@ -66,12 +200,23 @@ void desktop_run(void) {
     int prev_buttons = 0;
     int need_redraw = 1;
     uint32_t last_draw = timer_ticks();
+    uint32_t last_clock = timer_ticks();
 
     for (;;) {
         char k;
         while (keyboard_trygetchar(&k)) {
-            if (k == 0x1B || k == 'q' || k == 'Q') { /* ESC */
+            if (k == 0x1B || k == 'q' || k == 'Q')
                 goto done;
+            /* hotkeys */
+            if (k == 'c' || k == 'C') {
+                if (clock_id < 0 || !mk_surface_get(clock_id) || !mk_surface_get(clock_id)->used)
+                    clock_id = open_clock();
+                need_redraw = 1;
+            }
+            if (k == 'i' || k == 'I') {
+                if (sysinfo_id < 0 || !mk_surface_get(sysinfo_id) || !mk_surface_get(sysinfo_id)->used)
+                    sysinfo_id = open_sysinfo();
+                need_redraw = 1;
             }
         }
 
@@ -84,7 +229,6 @@ void desktop_run(void) {
         int left_up = !left && (prev_buttons & 1);
 
         if (left_down) {
-            /* Panel power buttons */
             int rx, sx, by, bw, bh;
             mk_panel_power_rects(&rx, &sx, &by, &bw, &bh);
             if (m.y >= by && m.y < by + bh) {
@@ -100,9 +244,22 @@ void desktop_run(void) {
                 }
             }
 
+            /* Start button → reopen apps if closed */
+            int stx, sty, stw, sth;
+            start_btn_rect(&stx, &sty, &stw, &sth);
+            if (m.x >= stx && m.x < stx + stw && m.y >= sty && m.y < sty + sth) {
+                if (clock_id < 0 || !mk_surface_get(clock_id) || !mk_surface_get(clock_id)->used)
+                    clock_id = open_clock();
+                if (sysinfo_id < 0 || !mk_surface_get(sysinfo_id) || !mk_surface_get(sysinfo_id)->used)
+                    sysinfo_id = open_sysinfo();
+                need_redraw = 1;
+            }
+
             int lx, ly, on_title, on_close;
             int id = mk_hit_test(m.x, m.y, &lx, &ly, &on_title, &on_close);
             if (id >= 0 && on_close) {
+                if (id == clock_id) clock_id = -1;
+                if (id == sysinfo_id) sysinfo_id = -1;
                 mk_surface_destroy(id);
                 need_redraw = 1;
                 dragging = 0;
@@ -122,7 +279,22 @@ void desktop_run(void) {
             need_redraw = 1;
         }
 
-        /* Cursor only when not doing a full compose this frame */
+        /* Refresh clock ~1 Hz */
+        {
+            uint32_t now = timer_ticks();
+            uint32_t hz = timer_hz();
+            if (hz == 0) hz = 100;
+            if (clock_id >= 0 && (now - last_clock) >= hz) {
+                struct mk_surface* cs = mk_surface_get(clock_id);
+                if (cs && cs->used) {
+                    paint_clock(cs);
+                    mk_surface_commit(clock_id);
+                    need_redraw = 1;
+                }
+                last_clock = now;
+            }
+        }
+
         static int last_mx = -1, last_my = -1;
         int mouse_moved = (m.x != last_mx || m.y != last_my);
         if (mouse_moved) {
@@ -130,14 +302,9 @@ void desktop_run(void) {
             last_my = m.y;
         }
 
-        /*
-         * Full compose is expensive (clears whole FB). During drag throttle
-         * to ~20 FPS (50ms at 100Hz timer) to reduce flicker.
-         * On release / close always redraw immediately.
-         */
         if (need_redraw) {
             uint32_t now = timer_ticks();
-            uint32_t min_dt = dragging ? 1 : 0; /* 1 tick ≈ 10ms ~100 FPS try */
+            uint32_t min_dt = dragging ? 1 : 0;
             if ((now - last_draw) >= min_dt || left_up || left_down) {
                 mk_compose();
                 need_redraw = 0;
@@ -155,7 +322,6 @@ void desktop_run(void) {
 
 done:
     mk_shutdown();
-    /* VBE DISPI off is not enough — must reprogram VGA to 80x25 text */
     gfx_restore_text();
     terminal_writestring("desktop: exited\n");
 }
