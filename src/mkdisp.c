@@ -8,6 +8,8 @@
 
 static struct mk_surface g_surf[MK_MAX_SURFACES];
 static int g_active;
+static void (*g_desktop_layer)(void) = 0;
+static void (*g_desktop_overlay)(void) = 0;
 static uint32_t g_wallpaper = 0x002B579A; /* Win7-ish blue */
 static int g_sw, g_sh;
 /* Off-screen compose buffer (fixed VA, not kmalloc — up to 1024x768x4) */
@@ -260,8 +262,10 @@ static void draw_panel(void) {
     int y = g_sh - MK_PANEL_H;
     bb_fill(0, y, g_sw, MK_PANEL_H, 0x001F1F1F);
     bb_fill(0, y, g_sw, 1, 0x00444444);
-    bb_fill(4, y + 4, 72, MK_PANEL_H - 8, 0x000078D7);
-    bb_text(12, y + 6, "MyKernel", 0x00FFFFFF, 0x000078D7);
+    /* Windows-like Start button */
+    bb_fill(4, y + 3, 88, MK_PANEL_H - 6, 0x00005A9E);
+    bb_fill(6, y + 5, 84, MK_PANEL_H - 10, 0x000078D7);
+    bb_text(22, y + 6, "Start", 0x00FFFFFF, 0x000078D7);
 
     int rx, sx, by, bw, bh;
     mk_panel_power_rects(&rx, &sx, &by, &bw, &bh);
@@ -340,20 +344,36 @@ void mk_cursor_move(int x, int y) {
     cursor_paint_at(x, y);
 }
 
+
+void mk_bb_fill(int x, int y, int w, int h, uint32_t color) {
+    bb_fill(x, y, w, h, color);
+}
+void mk_bb_text(int x, int y, const char* s, uint32_t fg, uint32_t bg) {
+    bb_text(x, y, s, fg, bg);
+}
+void mk_set_desktop_layer(void (*paint)(void)) {
+    g_desktop_layer = paint;
+}
+void mk_set_desktop_overlay(void (*paint)(void)) {
+    g_desktop_overlay = paint;
+}
+
 void mk_compose(void) {
     if (!g_active) return;
 
     /* Drop cursor underlay — full frame will replace LFB */
     cursor_under_valid = 0;
 
-    /* Scene without cursor */
+    /* Wallpaper */
     bb_fill(0, 0, g_sw, g_sh, g_wallpaper);
-    for (int y = 0; y < 80 && y < g_sh; y++) {
-        uint8_t shade = (uint8_t)(30 + y);
-        bb_fill(0, y, g_sw, 1, vbe_rgb(0, shade / 2, (uint8_t)(80 + shade)));
+    for (int y = 0; y < 100 && y < g_sh; y++) {
+        uint8_t shade = (uint8_t)(40 + y / 2);
+        bb_fill(0, y, g_sw, 1, vbe_rgb(20, (uint8_t)(60 + shade / 3), (uint8_t)(120 + shade / 2)));
     }
-    bb_text(16, 12, "MyKernel Desktop", 0x00FFFFFF, g_wallpaper);
-    bb_text(16, 30, "Drag window | panel: Reboot / Shutdown | ESC=exit", 0x00D0D0D0, g_wallpaper);
+
+    /* Desktop icons (under windows) */
+    if (g_desktop_layer)
+        g_desktop_layer();
 
     int top = -1;
     for (int i = 0; i < MK_MAX_SURFACES; i++)
@@ -365,12 +385,17 @@ void mk_compose(void) {
         draw_window(&g_surf[i], i == top);
         g_surf[i].dirty = 0;
     }
+
     draw_panel();
+
+    /* Start menu etc. on top of panel/windows */
+    if (g_desktop_overlay)
+        g_desktop_overlay();
 
     if (g_back_ok)
         flip_to_lfb();
 
-    /* Cursor only on LFB after flip — no trail in backbuffer */
+    /* Cursor only on LFB after flip */
     {
         struct mouse_state m;
         mouse_get(&m);

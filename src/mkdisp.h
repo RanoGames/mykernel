@@ -48,3 +48,9 @@ int  mk_screen_h(void);
 void mk_panel_power_rects(int* reboot_x, int* shut_x, int* by, int* bw, int* bh);
 
 #endif
+
+/* Draw into compose backbuffer (call from desktop between frames via hook) */
+void mk_bb_fill(int x, int y, int w, int h, uint32_t color);
+void mk_bb_text(int x, int y, const char* s, uint32_t fg, uint32_t bg);
+void mk_set_desktop_layer(void (*paint)(void));   /* icons under windows */
+void mk_set_desktop_overlay(void (*paint)(void)); /* Start menu on top */
