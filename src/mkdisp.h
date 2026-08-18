@@ -45,4 +45,6 @@ int  mk_hit_test(int sx, int sy, int* local_x, int* local_y, int* on_title, int*
 int  mk_screen_w(void);
 int  mk_screen_h(void);
 
+void mk_panel_power_rects(int* reboot_x, int* shut_x, int* by, int* bw, int* bh);
+
 #endif

@@ -8,6 +8,7 @@
 #include "keyboard.h"
 #include "vga.h"
 #include "platform.h"
+#include "power.h"
 #include "gfx.h"
 #include "timer.h"
 #include "settings.h"
@@ -83,6 +84,22 @@ void desktop_run(void) {
         int left_up = !left && (prev_buttons & 1);
 
         if (left_down) {
+            /* Panel power buttons */
+            int rx, sx, by, bw, bh;
+            mk_panel_power_rects(&rx, &sx, &by, &bw, &bh);
+            if (m.y >= by && m.y < by + bh) {
+                if (m.x >= rx && m.x < rx + bw) {
+                    mk_shutdown();
+                    gfx_restore_text();
+                    machine_reboot();
+                }
+                if (m.x >= sx && m.x < sx + bw) {
+                    mk_shutdown();
+                    gfx_restore_text();
+                    machine_shutdown();
+                }
+            }
+
             int lx, ly, on_title, on_close;
             int id = mk_hit_test(m.x, m.y, &lx, &ly, &on_title, &on_close);
             if (id >= 0 && on_close) {

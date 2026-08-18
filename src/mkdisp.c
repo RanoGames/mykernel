@@ -242,24 +242,56 @@ static void draw_window(struct mk_surface* s, int focused) {
     }
 }
 
+
+/* Panel button geometry (for hit-test from desktop) */
+#define PANEL_BTN_W 80
+#define PANEL_BTN_H 20
+
+void mk_panel_power_rects(int* reboot_x, int* shut_x, int* by, int* bw, int* bh) {
+    int y = g_sh - MK_PANEL_H;
+    if (by) *by = y + 4;
+    if (bw) *bw = PANEL_BTN_W;
+    if (bh) *bh = PANEL_BTN_H;
+    if (reboot_x) *reboot_x = g_sw - (PANEL_BTN_W * 2 + 16);
+    if (shut_x) *shut_x = g_sw - (PANEL_BTN_W + 8);
+}
+
 static void draw_panel(void) {
     int y = g_sh - MK_PANEL_H;
     bb_fill(0, y, g_sw, MK_PANEL_H, 0x001F1F1F);
     bb_fill(0, y, g_sw, 1, 0x00444444);
     bb_fill(4, y + 4, 72, MK_PANEL_H - 8, 0x000078D7);
     bb_text(12, y + 6, "MyKernel", 0x00FFFFFF, 0x000078D7);
-    bb_text(g_sw - 200, y + 6, "ESC = exit desktop", 0x00AAAAAA, 0x001F1F1F);
+
+    int rx, sx, by, bw, bh;
+    mk_panel_power_rects(&rx, &sx, &by, &bw, &bh);
+    bb_fill(rx, by, bw, bh, 0x00C19C00); /* reboot - amber */
+    bb_text(rx + 12, by + 2, "Reboot", 0x00FFFFFF, 0x00C19C00);
+    bb_fill(sx, by, bw, bh, 0x00C42B1C); /* shutdown - red */
+    bb_text(sx + 4, by + 2, "Shutdown", 0x00FFFFFF, 0x00C42B1C);
+}
+
+/* ---- cursor: ONLY on LFB (never baked into backbuffer) ---- */
+
+static uint32_t lfb_get(int x, int y) {
+    const struct vbe_info* vi = vbe_get_info();
+    if (!vi || !vi->active || !vi->lfb) return 0;
+    if ((unsigned)x >= vi->width || (unsigned)y >= vi->height) return 0;
+    volatile uint32_t* fb = (volatile uint32_t*)(uint32_t)vi->lfb;
+    return fb[y * vi->width + x];
+}
+
+static void lfb_put(int x, int y, uint32_t c) {
+    vbe_putpixel(x, y, c);
 }
 
 static void cursor_restore_under(void) {
     if (!cursor_under_valid || !g_active) return;
     for (int row = 0; row < MK_CURSOR_H; row++) {
         for (int col = 0; col < MK_CURSOR_W; col++) {
-            bb_put(cursor_ux + col, cursor_uy + row,
-                   cursor_under[row * MK_CURSOR_W + col]);
-            if (!g_back_ok)
-                vbe_putpixel(cursor_ux + col, cursor_uy + row,
-                             cursor_under[row * MK_CURSOR_W + col]);
+            if (!cursor_mask[row][col]) continue;
+            lfb_put(cursor_ux + col, cursor_uy + row,
+                    cursor_under[row * MK_CURSOR_W + col]);
         }
     }
     cursor_under_valid = 0;
@@ -269,18 +301,7 @@ static void cursor_save_under(int x, int y) {
     if (!g_active) return;
     for (int row = 0; row < MK_CURSOR_H; row++) {
         for (int col = 0; col < MK_CURSOR_W; col++) {
-            uint32_t pix = 0;
-            int px = x + col, py = y + row;
-            if ((unsigned)px < (unsigned)g_sw && (unsigned)py < (unsigned)g_sh) {
-                if (g_back_ok)
-                    pix = g_back[py * g_sw + px];
-                else {
-                    const struct vbe_info* vi = vbe_get_info();
-                    if (vi && vi->lfb)
-                        pix = ((volatile uint32_t*)(uint32_t)vi->lfb)[py * vi->width + px];
-                }
-            }
-            cursor_under[row * MK_CURSOR_W + col] = pix;
+            cursor_under[row * MK_CURSOR_W + col] = lfb_get(x + col, y + row);
         }
     }
     cursor_ux = x;
@@ -293,14 +314,7 @@ static void cursor_paint_at(int x, int y) {
         for (int col = 0; col < MK_CURSOR_W; col++) {
             uint8_t v = cursor_mask[row][col];
             if (!v) continue;
-            uint32_t c = (v == 1) ? 0x00FFFFFF : 0x00000000;
-            if (g_back_ok) {
-                bb_put(x + col, y + row, c);
-                /* also paint to LFB for live cursor without full flip */
-                vbe_putpixel(x + col, y + row, c);
-            } else {
-                vbe_putpixel(x + col, y + row, c);
-            }
+            lfb_put(x + col, y + row, (v == 1) ? 0x00FFFFFF : 0x00000000);
         }
     }
 }
@@ -308,6 +322,7 @@ static void cursor_paint_at(int x, int y) {
 void mk_draw_cursor(void) {
     struct mouse_state m;
     mouse_get(&m);
+    cursor_restore_under();
     cursor_save_under(m.x, m.y);
     cursor_paint_at(m.x, m.y);
 }
@@ -320,30 +335,25 @@ void mk_cursor_move(int x, int y) {
     if (!g_active) return;
     if (cursor_under_valid && cursor_ux == x && cursor_uy == y)
         return;
-    /* restore old underlay on LFB (backbuffer not flipped for cursor-only moves) */
-    if (cursor_under_valid) {
-        for (int row = 0; row < MK_CURSOR_H; row++)
-            for (int col = 0; col < MK_CURSOR_W; col++)
-                vbe_putpixel(cursor_ux + col, cursor_uy + row,
-                             cursor_under[row * MK_CURSOR_W + col]);
-        cursor_under_valid = 0;
-    }
+    cursor_restore_under();
     cursor_save_under(x, y);
     cursor_paint_at(x, y);
 }
 
 void mk_compose(void) {
     if (!g_active) return;
+
+    /* Drop cursor underlay — full frame will replace LFB */
     cursor_under_valid = 0;
 
-    /* paint full frame into backbuffer */
+    /* Scene without cursor */
     bb_fill(0, 0, g_sw, g_sh, g_wallpaper);
     for (int y = 0; y < 80 && y < g_sh; y++) {
         uint8_t shade = (uint8_t)(30 + y);
         bb_fill(0, y, g_sw, 1, vbe_rgb(0, shade / 2, (uint8_t)(80 + shade)));
     }
     bb_text(16, 12, "MyKernel Desktop", 0x00FFFFFF, g_wallpaper);
-    bb_text(16, 30, "Drag title bar | click X to close window", 0x00D0D0D0, g_wallpaper);
+    bb_text(16, 30, "Drag window | panel: Reboot / Shutdown | ESC=exit", 0x00D0D0D0, g_wallpaper);
 
     int top = -1;
     for (int i = 0; i < MK_MAX_SURFACES; i++)
@@ -357,24 +367,15 @@ void mk_compose(void) {
     }
     draw_panel();
 
-    /* cursor into backbuffer, then one flip */
+    if (g_back_ok)
+        flip_to_lfb();
+
+    /* Cursor only on LFB after flip — no trail in backbuffer */
     {
         struct mouse_state m;
         mouse_get(&m);
         cursor_save_under(m.x, m.y);
-        for (int row = 0; row < MK_CURSOR_H; row++) {
-            for (int col = 0; col < MK_CURSOR_W; col++) {
-                uint8_t v = cursor_mask[row][col];
-                if (!v) continue;
-                bb_put(m.x + col, m.y + row, (v == 1) ? 0x00FFFFFF : 0x00000000);
-            }
-        }
-    }
-
-    if (g_back_ok)
-        flip_to_lfb();
-    else {
-        /* fallback already painted via bb_* -> vbe */
+        cursor_paint_at(m.x, m.y);
     }
 }
 
