@@ -265,7 +265,7 @@ static void print_fat_error(enum fat_result err) {
 static void cmd_help(void) {
     terminal_writestring("System: help clear echo about uname whoami free history\n");
     terminal_writestring("        reboot shutdown calc <expr>\n");
-    terminal_writestring("RAM FS: ls pwd cd mkdir touch cat rm write append cp mv\n");
+    terminal_writestring("RAM FS: ls pwd cd mkdir touch cat rm[-r] write append cp mv\n");
     terminal_writestring("FAT32:  fatmount fatinfo fatls fatcat fatwrite\n");
     terminal_writestring("Lang:   lang | lang <file>\n");
     terminal_writestring("Tasks:  ps  spawn\n");
@@ -341,8 +341,24 @@ static void cmd_touch(const char* arg) {
     if (r != FS_OK) print_fs_error(r);
 }
 static void cmd_rm(const char* arg) {
-    if (arg[0] == '\0') { terminal_writestring("Usage: rm <name>\n"); return; }
-    enum fs_result r = fs_rm(arg);
+    /* rm [-r|-rf] <name> */
+    int recursive = 0;
+    while (arg[0] == '-') {
+        if (arg[1] == 'r' || arg[1] == 'R') {
+            recursive = 1;
+            arg += 2;
+            if (arg[0] == 'f' || arg[0] == 'F') arg++; /* -rf */
+            while (arg[0] == ' ') arg++;
+        } else {
+            terminal_writestring("Usage: rm [-r|-rf] <name>\n");
+            return;
+        }
+    }
+    if (arg[0] == '\0') {
+        terminal_writestring("Usage: rm [-r|-rf] <name>\n");
+        return;
+    }
+    enum fs_result r = recursive ? fs_rm_rf(arg) : fs_rm(arg);
     if (r != FS_OK) print_fs_error(r);
 }
 static void cmd_cat(const char* arg) {

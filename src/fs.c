@@ -137,7 +137,52 @@ enum fs_result fs_cd(const char* name) {
     return FS_OK;
 }
 
+/* Free node idx and all descendants (post-order). depth guards cycles. */
+static enum fs_result fs_rm_node_recursive(int idx, int depth) {
+    if (idx < 0 || idx >= FS_MAX_NODES) return FS_ERR_NOT_FOUND;
+    if (nodes[idx].type == FS_TYPE_FREE) return FS_OK;
+    if (idx == FS_ROOT_INDEX) return FS_ERR_INVALID_NAME; /* never delete / */
+    if (depth > FS_MAX_DEPTH) return FS_ERR_INVALID_NAME;
+
+    if (nodes[idx].type == FS_TYPE_DIR) {
+        /* Restart scan: removing children shifts logical tree */
+        int progress = 1;
+        while (progress) {
+            progress = 0;
+            for (int i = 0; i < FS_MAX_NODES; i++) {
+                if (nodes[i].type == FS_TYPE_FREE) continue;
+                if (nodes[i].parent != idx) continue;
+                enum fs_result r = fs_rm_node_recursive(i, depth + 1);
+                if (r != FS_OK) return r;
+                progress = 1;
+                break; /* restart from beginning after one removal */
+            }
+        }
+    }
+
+    /* If cwd was inside deleted subtree, jump to parent of idx or root */
+    int p = nodes[idx].parent;
+    int walk = cwd;
+    while (walk != -1) {
+        if (walk == idx) {
+            cwd = (p >= 0) ? p : FS_ROOT_INDEX;
+            break;
+        }
+        walk = nodes[walk].parent;
+    }
+
+    nodes[idx].type = FS_TYPE_FREE;
+    nodes[idx].content_len = 0;
+    nodes[idx].content[0] = '\0';
+    nodes[idx].name[0] = '\0';
+    nodes[idx].parent = -1;
+    return FS_OK;
+}
+
+/* Non-recursive: files OK; empty dirs OK; non-empty dir → DIR_NOT_EMPTY */
 enum fs_result fs_rm(const char* name) {
+    if (!name || !name[0]) return FS_ERR_INVALID_NAME;
+    if (name[0] == '/' && name[1] == '\0') return FS_ERR_INVALID_NAME;
     int idx = fs_find_child(cwd, name);
     if (idx == -1) return FS_ERR_NOT_FOUND;
     if (nodes[idx].type == FS_TYPE_DIR) {
@@ -145,8 +190,16 @@ enum fs_result fs_rm(const char* name) {
             if (nodes[i].type != FS_TYPE_FREE && nodes[i].parent == idx)
                 return FS_ERR_DIR_NOT_EMPTY;
     }
-    nodes[idx].type = FS_TYPE_FREE;
-    return FS_OK;
+    return fs_rm_node_recursive(idx, 0);
+}
+
+/* Recursive: rm -r — delete file or directory tree */
+enum fs_result fs_rm_rf(const char* name) {
+    if (!name || !name[0]) return FS_ERR_INVALID_NAME;
+    if (name[0] == '/' && name[1] == '\0') return FS_ERR_INVALID_NAME;
+    int idx = fs_find_child(cwd, name);
+    if (idx == -1) return FS_ERR_NOT_FOUND;
+    return fs_rm_node_recursive(idx, 0);
 }
 
 enum fs_result fs_write(const char* name, const char* text) {
