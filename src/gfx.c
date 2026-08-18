@@ -43,15 +43,13 @@ static void gfx_set_text_palette(void) {
 }
 
 void gfx_wait_vsync(void) {
-    /* VirtualBox often never toggles 0x3DA bit3 — must not spin forever */
+    /* VirtualBox often never toggles 0x3DA bit3 — bounded spin only */
     int i;
-    for (i = 0; i < 100000; i++) {
-        if (!(inb(0x3DA) & 0x08))
-            break;
+    for (i = 0; i < 50000; i++) {
+        if (!(inb(0x3DA) & 0x08)) break;
     }
-    for (i = 0; i < 100000; i++) {
-        if (inb(0x3DA) & 0x08)
-            break;
+    for (i = 0; i < 50000; i++) {
+        if (inb(0x3DA) & 0x08) break;
     }
 }
 

@@ -1,6 +1,7 @@
 #include "mkdisp.h"
 #include "mkdraw.h"
 #include "vbe.h"
+#include "gfx.h"
 #include "kmalloc.h"
 #include "mouse.h"
 #include <stddef.h>
@@ -9,6 +10,11 @@ static struct mk_surface g_surf[MK_MAX_SURFACES];
 static int g_active;
 static uint32_t g_wallpaper = 0x002B579A; /* Win7-ish blue */
 static int g_sw, g_sh;
+/* Off-screen compose buffer (fixed VA, not kmalloc — up to 1024x768x4) */
+#define MK_BACK_BASE 0x00700000u
+#define MK_BACK_MAX  (1024u * 768u * 4u)
+static uint32_t* g_back;
+static int g_back_ok;
 
 /* Cursor underlay to avoid full-screen redraw on mouse move */
 static uint32_t cursor_under[MK_CURSOR_W * MK_CURSOR_H];
@@ -56,6 +62,16 @@ int mk_init(int vbe_mode_id) {
     for (int i = 0; i < MK_MAX_SURFACES; i++) {
         g_surf[i].used = 0;
         g_surf[i].pixels = 0;
+    }
+    {
+        uint32_t need = (uint32_t)g_sw * (uint32_t)g_sh * 4u;
+        g_back = 0;
+        g_back_ok = 0;
+        if (need > 0 && need <= MK_BACK_MAX) {
+            g_back = (uint32_t*)MK_BACK_BASE;
+            for (uint32_t i = 0; i < need / 4u; i++) g_back[i] = 0;
+            g_back_ok = 1;
+        }
     }
     g_active = 1;
     return 0;
@@ -142,7 +158,60 @@ struct mk_surface* mk_surface_get(int id) {
     return &g_surf[id];
 }
 
-/* Frame window: title bar + border + client blit */
+
+/* ---- draw into backbuffer (or LFB if no back) ---- */
+
+static inline void bb_put(int x, int y, uint32_t c) {
+    if ((unsigned)x >= (unsigned)g_sw || (unsigned)y >= (unsigned)g_sh) return;
+    if (g_back_ok)
+        g_back[y * g_sw + x] = c;
+    else
+        vbe_putpixel(x, y, c);
+}
+
+static void bb_fill(int x, int y, int w, int h, uint32_t c) {
+    if (w <= 0 || h <= 0) return;
+    for (int j = 0; j < h; j++) {
+        int yy = y + j;
+        if ((unsigned)yy >= (unsigned)g_sh) continue;
+        for (int i = 0; i < w; i++) {
+            int xx = x + i;
+            if ((unsigned)xx >= (unsigned)g_sw) continue;
+            bb_put(xx, yy, c);
+        }
+    }
+}
+
+static void bb_char(int x, int y, char ch, uint32_t fg, uint32_t bg) {
+    const uint8_t* g = gfx_font_glyph((unsigned char)ch);
+    for (int row = 0; row < 16; row++) {
+        uint8_t bits = g[row];
+        for (int col = 0; col < 8; col++)
+            bb_put(x + col, y + row, (bits & (0x80 >> col)) ? fg : bg);
+    }
+}
+
+static void bb_text(int x, int y, const char* s, uint32_t fg, uint32_t bg) {
+    int cx = x;
+    while (s && *s) {
+        if (*s == '\n') { cx = x; y += 16; s++; continue; }
+        bb_char(cx, y, *s, fg, bg);
+        cx += 8;
+        s++;
+    }
+}
+
+static void flip_to_lfb(void) {
+    if (!g_back_ok || !g_active) return;
+    const struct vbe_info* vi = vbe_get_info();
+    if (!vi || !vi->active || !vi->lfb) return;
+    volatile uint32_t* fb = (volatile uint32_t*)(uint32_t)vi->lfb;
+    uint32_t n = (uint32_t)g_sw * (uint32_t)g_sh;
+    /* single blast — no tearing mid-frame */
+    for (uint32_t i = 0; i < n; i++)
+        fb[i] = g_back[i];
+}
+
 static void draw_window(struct mk_surface* s, int focused) {
     int fx = s->x;
     int fy = s->y;
@@ -151,22 +220,23 @@ static void draw_window(struct mk_surface* s, int focused) {
     uint32_t title_bg = focused ? 0x00007ACC : 0x00666666;
     uint32_t border = 0x00222222;
 
-    vbe_fill_rect(fx - 1, fy - 1, fw + 2, fh + 2, border);
-    vbe_fill_rect(fx, fy, fw, MK_TITLE_H, title_bg);
+    bb_fill(fx - 1, fy - 1, fw + 2, fh + 2, border);
+    bb_fill(fx, fy, fw, MK_TITLE_H, title_bg);
 
-    /* close button */
     int cx = fx + fw - 22;
     int cy = fy + 4;
-    vbe_fill_rect(cx, cy, 16, 16, 0x00E81123);
-    mk_fb_text(cx + 4, cy, "X", 0x00FFFFFF, 0x00E81123);
+    bb_fill(cx, cy, 16, 16, 0x00E81123);
+    bb_text(cx + 4, cy, "X", 0x00FFFFFF, 0x00E81123);
+    bb_text(fx + 8, fy + 4, s->title, 0x00FFFFFF, title_bg);
 
-    mk_fb_text(fx + 8, fy + 4, s->title, 0x00FFFFFF, title_bg);
-
-    /* client area */
     if (s->pixels) {
         for (int row = 0; row < s->h; row++) {
+            int yy = fy + MK_TITLE_H + row;
+            if ((unsigned)yy >= (unsigned)g_sh) continue;
             for (int col = 0; col < s->w; col++) {
-                vbe_putpixel(fx + col, fy + MK_TITLE_H + row, s->pixels[row * s->w + col]);
+                int xx = fx + col;
+                if ((unsigned)xx >= (unsigned)g_sw) continue;
+                bb_put(xx, yy, s->pixels[row * s->w + col]);
             }
         }
     }
@@ -174,20 +244,22 @@ static void draw_window(struct mk_surface* s, int focused) {
 
 static void draw_panel(void) {
     int y = g_sh - MK_PANEL_H;
-    vbe_fill_rect(0, y, g_sw, MK_PANEL_H, 0x001F1F1F);
-    vbe_fill_rect(0, y, g_sw, 1, 0x00444444);
-    /* Start-like button */
-    vbe_fill_rect(4, y + 4, 72, MK_PANEL_H - 8, 0x000078D7);
-    mk_fb_text(12, y + 6, "MyKernel", 0x00FFFFFF, 0x000078D7);
-    mk_fb_text(g_sw - 200, y + 6, "ESC = exit desktop", 0x00AAAAAA, 0x001F1F1F);
+    bb_fill(0, y, g_sw, MK_PANEL_H, 0x001F1F1F);
+    bb_fill(0, y, g_sw, 1, 0x00444444);
+    bb_fill(4, y + 4, 72, MK_PANEL_H - 8, 0x000078D7);
+    bb_text(12, y + 6, "MyKernel", 0x00FFFFFF, 0x000078D7);
+    bb_text(g_sw - 200, y + 6, "ESC = exit desktop", 0x00AAAAAA, 0x001F1F1F);
 }
 
 static void cursor_restore_under(void) {
     if (!cursor_under_valid || !g_active) return;
     for (int row = 0; row < MK_CURSOR_H; row++) {
         for (int col = 0; col < MK_CURSOR_W; col++) {
-            vbe_putpixel(cursor_ux + col, cursor_uy + row,
-                         cursor_under[row * MK_CURSOR_W + col]);
+            bb_put(cursor_ux + col, cursor_uy + row,
+                   cursor_under[row * MK_CURSOR_W + col]);
+            if (!g_back_ok)
+                vbe_putpixel(cursor_ux + col, cursor_uy + row,
+                             cursor_under[row * MK_CURSOR_W + col]);
         }
     }
     cursor_under_valid = 0;
@@ -197,14 +269,15 @@ static void cursor_save_under(int x, int y) {
     if (!g_active) return;
     for (int row = 0; row < MK_CURSOR_H; row++) {
         for (int col = 0; col < MK_CURSOR_W; col++) {
-            /* read pixel from LFB */
-            const struct vbe_info* vi = vbe_get_info();
             uint32_t pix = 0;
-            if (vi && vi->active && vi->lfb) {
-                int px = x + col, py = y + row;
-                if ((unsigned)px < vi->width && (unsigned)py < vi->height) {
-                    volatile uint32_t* fb = (volatile uint32_t*)(uint32_t)vi->lfb;
-                    pix = fb[py * vi->width + px];
+            int px = x + col, py = y + row;
+            if ((unsigned)px < (unsigned)g_sw && (unsigned)py < (unsigned)g_sh) {
+                if (g_back_ok)
+                    pix = g_back[py * g_sw + px];
+                else {
+                    const struct vbe_info* vi = vbe_get_info();
+                    if (vi && vi->lfb)
+                        pix = ((volatile uint32_t*)(uint32_t)vi->lfb)[py * vi->width + px];
                 }
             }
             cursor_under[row * MK_CURSOR_W + col] = pix;
@@ -221,7 +294,13 @@ static void cursor_paint_at(int x, int y) {
             uint8_t v = cursor_mask[row][col];
             if (!v) continue;
             uint32_t c = (v == 1) ? 0x00FFFFFF : 0x00000000;
-            vbe_putpixel(x + col, y + row, c);
+            if (g_back_ok) {
+                bb_put(x + col, y + row, c);
+                /* also paint to LFB for live cursor without full flip */
+                vbe_putpixel(x + col, y + row, c);
+            } else {
+                vbe_putpixel(x + col, y + row, c);
+            }
         }
     }
 }
@@ -241,24 +320,30 @@ void mk_cursor_move(int x, int y) {
     if (!g_active) return;
     if (cursor_under_valid && cursor_ux == x && cursor_uy == y)
         return;
-    cursor_restore_under();
+    /* restore old underlay on LFB (backbuffer not flipped for cursor-only moves) */
+    if (cursor_under_valid) {
+        for (int row = 0; row < MK_CURSOR_H; row++)
+            for (int col = 0; col < MK_CURSOR_W; col++)
+                vbe_putpixel(cursor_ux + col, cursor_uy + row,
+                             cursor_under[row * MK_CURSOR_W + col]);
+        cursor_under_valid = 0;
+    }
     cursor_save_under(x, y);
     cursor_paint_at(x, y);
 }
 
 void mk_compose(void) {
     if (!g_active) return;
-    cursor_under_valid = 0; /* frame will be fully redrawn */
-    vbe_clear(g_wallpaper);
+    cursor_under_valid = 0;
 
-    /* soft gradient strip at top */
+    /* paint full frame into backbuffer */
+    bb_fill(0, 0, g_sw, g_sh, g_wallpaper);
     for (int y = 0; y < 80 && y < g_sh; y++) {
         uint8_t shade = (uint8_t)(30 + y);
-        vbe_fill_rect(0, y, g_sw, 1, vbe_rgb(0, shade / 2, (uint8_t)(80 + shade)));
+        bb_fill(0, y, g_sw, 1, vbe_rgb(0, shade / 2, (uint8_t)(80 + shade)));
     }
-
-    mk_fb_text(16, 12, "MyKernel Desktop", 0x00FFFFFF, g_wallpaper);
-    mk_fb_text(16, 30, "Drag title bar | click X to close window", 0x00D0D0D0, g_wallpaper);
+    bb_text(16, 12, "MyKernel Desktop", 0x00FFFFFF, g_wallpaper);
+    bb_text(16, 30, "Drag title bar | click X to close window", 0x00D0D0D0, g_wallpaper);
 
     int top = -1;
     for (int i = 0; i < MK_MAX_SURFACES; i++)
@@ -270,9 +355,27 @@ void mk_compose(void) {
         draw_window(&g_surf[i], i == top);
         g_surf[i].dirty = 0;
     }
-
     draw_panel();
-    mk_draw_cursor();
+
+    /* cursor into backbuffer, then one flip */
+    {
+        struct mouse_state m;
+        mouse_get(&m);
+        cursor_save_under(m.x, m.y);
+        for (int row = 0; row < MK_CURSOR_H; row++) {
+            for (int col = 0; col < MK_CURSOR_W; col++) {
+                uint8_t v = cursor_mask[row][col];
+                if (!v) continue;
+                bb_put(m.x + col, m.y + row, (v == 1) ? 0x00FFFFFF : 0x00000000);
+            }
+        }
+    }
+
+    if (g_back_ok)
+        flip_to_lfb();
+    else {
+        /* fallback already painted via bb_* -> vbe */
+    }
 }
 
 int mk_hit_test(int sx, int sy, int* local_x, int* local_y, int* on_title, int* on_close) {

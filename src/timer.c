@@ -18,16 +18,14 @@ static void timer_callback(struct registers* regs) {
     sched_on_tick();
 }
 
-/* hz: типично 100 (10 ms/тик) или 1000 (1 ms). 0 → 100. */
 void timer_init(uint32_t hz) {
     if (hz == 0) hz = 100;
-    if (hz > 1000) hz = 1000; /* не гоняем PIT слишком часто */
+    if (hz > 1000) hz = 1000;
 
     uint32_t divisor = PIT_BASE_HZ / hz;
     if (divisor < 1) divisor = 1;
     if (divisor > 65535) divisor = 65535;
 
-    /* Mode 3 (square wave), channel 0, access lobyte/hibyte */
     outb(PIT_COMMAND, 0x36);
     outb(PIT_CHANNEL0, (uint8_t)(divisor & 0xFF));
     outb(PIT_CHANNEL0, (uint8_t)((divisor >> 8) & 0xFF));
@@ -38,12 +36,30 @@ void timer_init(uint32_t hz) {
 }
 
 void timer_sleep_ms(uint32_t ms) {
-    uint32_t ticks_needed = (g_hz * ms) / 1000;
-    if (ticks_needed == 0)
-        ticks_needed = 1;
-    uint32_t target = g_ticks + ticks_needed;
-    while (g_ticks < target) {
+    uint32_t start = g_ticks;
+    uint32_t need = (g_hz * ms) / 1000;
+    if (need == 0) need = 1;
+
+    /* Prefer PIT; if IRQ0 dead (some VMs), busy-wait */
+    uint32_t spins = 0;
+    while ((g_ticks - start) < need) {
+        if (g_ticks == start) {
+            spins++;
+            if (spins > 1000) {
+                timer_busy_ms(ms);
+                return;
+            }
+        }
         __asm__ volatile ("hlt");
+    }
+}
+
+/* Rough busy-wait — works without IRQ0 (VirtualBox quirks) */
+void timer_busy_ms(uint32_t ms) {
+    /* ~calibrated for typical QEMU/VBox i686; not exact */
+    for (uint32_t m = 0; m < ms; m++) {
+        for (volatile uint32_t i = 0; i < 20000u; i++)
+            __asm__ volatile ("pause");
     }
 }
 
@@ -53,4 +69,11 @@ uint32_t timer_ticks(void) {
 
 uint32_t timer_hz(void) {
     return g_hz;
+}
+
+/* True if IRQ0 advanced recently */
+int timer_is_alive(void) {
+    uint32_t a = g_ticks;
+    timer_busy_ms(20);
+    return g_ticks != a;
 }

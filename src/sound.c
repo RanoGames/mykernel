@@ -53,7 +53,15 @@ void sound_beep(uint32_t freq_hz, uint32_t duration_ms) {
         ticks = 1;
 
     uint32_t start = timer_ticks();
+    uint32_t spins = 0;
     while (timer_ticks() - start < ticks) {
+        if (timer_ticks() == start) {
+            spins++;
+            if (spins > 100) {
+                timer_busy_ms(duration_ms ? duration_ms : 10);
+                break;
+            }
+        }
         __asm__ volatile ("hlt");
     }
 

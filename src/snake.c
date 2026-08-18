@@ -152,7 +152,7 @@ static void draw_game_over(void) {
 }
 
 static void redraw_full(void) {
-    if (!use_vbe) gfx_wait_vsync();
+    if (!use_vbe && !platform_is_virtualbox()) gfx_wait_vsync();
     clear_screen();
     draw_border();
     draw_cell(food_x, food_y, 3);
@@ -163,7 +163,7 @@ static void redraw_full(void) {
 }
 
 static void redraw_step(void) {
-    if (!use_vbe) gfx_wait_vsync();
+    if (!use_vbe && !platform_is_virtualbox()) gfx_wait_vsync();
     if (!grew) draw_cell(tail_x, tail_y, 0);
     draw_cell(sx[0], sy[0], 1);
     if (slen > 1) draw_cell(sx[1], sy[1], 2);
@@ -269,9 +269,15 @@ void snake_run(void) {
     redraw_full();
 
     uint32_t last = timer_ticks();
-    /* ~8 moves/sec: period from timer_hz (ms → ticks) */
-    uint32_t period = (timer_hz() * 120) / 1000; /* 120 ms between steps */
+    uint32_t period = (timer_hz() * 120) / 1000;
     if (period < 1) period = 1;
+    /* If PIT IRQ0 is dead, fall back to busy-wait pacing */
+    int use_pit = 1;
+    {
+        uint32_t a = timer_ticks();
+        timer_busy_ms(30);
+        if (timer_ticks() == a) use_pit = 0;
+    }
 
     for (;;) {
         char c;
@@ -291,23 +297,34 @@ void snake_run(void) {
             }
             handle_key(c);
         }
-        uint32_t now = timer_ticks();
-        if (now - last >= period) {
-            last = now;
-            if (!dead) {
-                step();
-                if (dead) {
-                    if (!death_sounded && cfg->sound_enabled) {
-                        sound_beep_err();
-                        death_sounded = 1;
-                    }
-                    redraw_full();
-                } else {
-                    redraw_step();
+
+        int do_step = 0;
+        if (use_pit) {
+            uint32_t now = timer_ticks();
+            if (now - last >= period) {
+                last = now;
+                do_step = 1;
+            }
+        } else {
+            timer_busy_ms(120);
+            do_step = 1;
+        }
+
+        if (do_step && !dead) {
+            step();
+            if (dead) {
+                if (!death_sounded && cfg->sound_enabled) {
+                    sound_beep_err();
+                    death_sounded = 1;
                 }
+                redraw_full();
+            } else {
+                redraw_step();
             }
         }
-        __asm__ volatile ("hlt");
+
+        if (use_pit)
+            __asm__ volatile ("hlt");
     }
 done:
     if (use_vbe) {

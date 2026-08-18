@@ -120,7 +120,7 @@ void desktop_run(void) {
          */
         if (need_redraw) {
             uint32_t now = timer_ticks();
-            uint32_t min_dt = dragging ? 5 : 0; /* 5 ticks ≈ 50ms */
+            uint32_t min_dt = dragging ? 1 : 0; /* 1 tick ≈ 10ms ~100 FPS try */
             if ((now - last_draw) >= min_dt || left_up || left_down) {
                 mk_compose();
                 need_redraw = 0;

@@ -50,6 +50,12 @@ void pong_run(void) {
     int margin = use_vbe ? 20 : 8;
 
     uint32_t last = timer_ticks();
+    int use_pit = 1;
+    {
+        uint32_t a = timer_ticks();
+        timer_busy_ms(30);
+        if (timer_ticks() == a) use_pit = 0;
+    }
     for (;;) {
         char c;
         while (keyboard_trygetchar(&c)) {
@@ -64,8 +70,14 @@ void pong_run(void) {
         if (p2y < 0) p2y = 0;
         if (p2y + paddle_h > H) p2y = H - paddle_h;
 
-        if (timer_ticks() - last >= 2) {
-            last = timer_ticks();
+        int tick = 0;
+        if (use_pit) {
+            if (timer_ticks() - last >= 2) { last = timer_ticks(); tick = 1; }
+        } else {
+            timer_busy_ms(20);
+            tick = 1;
+        }
+        if (tick) {
             bx += bdx; by += bdy;
             if (by <= 0 || by + ball >= H) {
                 bdy = -bdy;
@@ -95,7 +107,8 @@ void pong_run(void) {
             rect(W - margin - paddle_w, p2y, paddle_w, paddle_h, vbe_rgb(255, 180, 80), GFX_YELLOW);
             rect(bx, by, ball, ball, vbe_rgb(255, 255, 255), GFX_WHITE);
         }
-        __asm__ volatile ("hlt");
+        if (use_pit)
+            __asm__ volatile ("hlt");
     }
 done:
     if (use_vbe) { vbe_disable(); gfx_restore_text(); }
