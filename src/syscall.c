@@ -823,9 +823,6 @@ void syscall_handler(struct registers* regs) {
         case SYS_SETHOSTNAME:
             ret = sys_sethostname((const char*)regs->ebx, (int)regs->ecx);
             break;
-        case SYS_GETHOSTNAME:
-            ret = sys_gethostname((char*)regs->ebx, (int)regs->ecx);
-            break;
         default:
             ret = -ENOSYS;
             break;
