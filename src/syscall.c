@@ -11,6 +11,7 @@
 #include "fs.h"
 #include "sched.h"
 #include "timer.h"
+#include "power.h"
 #include "kmalloc.h"
 #include <stdint.h>
 #include <stddef.h>
@@ -765,6 +766,15 @@ void syscall_handler(struct registers* regs) {
             break;
         case SYS_POLL:
         case SYS_SELECT:
+            ret = 0;
+            break;
+
+        case SYS_REBOOT:
+            /* magic in ebx/ecx optional; edx = cmd */
+            if (regs->edx == 0x4321FEDCu || regs->edx == 0xCDEF0123u)
+                machine_shutdown();
+            else
+                machine_reboot();
             ret = 0;
             break;
         default:

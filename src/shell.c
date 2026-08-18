@@ -2,6 +2,7 @@
 
 #include "shell.h"
 #include "vga.h"
+#include "power.h"
 #include "keyboard.h"
 #include "fs.h"
 #include "calc.h"
@@ -276,19 +277,11 @@ static void cmd_help(void) {
 }
 
 static void cmd_reboot(void) {
-    terminal_writestring("Rebooting...\n");
-    uint8_t good = 0x02;
-    while (good & 0x02) __asm__ volatile ("inb $0x64, %0" : "=a"(good));
-    __asm__ volatile ("outb %0, $0x64" : : "a"((uint8_t)0xFE));
-    for (;;) __asm__ volatile ("hlt");
+    machine_reboot();
 }
 
 static void cmd_shutdown(void) {
-    terminal_writestring("Shutting down...\n");
-    __asm__ volatile ("outw %0, %1" : : "a"((uint16_t)0x2000), "Nd"((uint16_t)0x604));
-    __asm__ volatile ("outw %0, %1" : : "a"((uint16_t)0x2000), "Nd"((uint16_t)0xB004));
-    __asm__ volatile ("outw %0, %1" : : "a"((uint16_t)0x3400), "Nd"((uint16_t)0x4004));
-    for (;;) __asm__ volatile ("cli; hlt");
+    machine_shutdown();
 }
 
 static void cmd_calc(const char* expr) {
