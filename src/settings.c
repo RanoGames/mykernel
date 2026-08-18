@@ -153,9 +153,13 @@ static char settings_wait_key(void) {
 }
 
 void settings_menu(void) {
-    /* Always start in classic text mode so VirtualBox can show the menu */
+    /* Restore text only if we were in graphics/FB — full CRTC rewrite is slow */
     terminal_disable_fb();
-    gfx_restore_text();
+    if (gfx_is_graphics() || platform_is_virtualbox()) {
+        /* VBox: cheap path — just ensure text buffer is writable */
+        if (gfx_is_graphics())
+            gfx_restore_text();
+    }
     kbd_drain();
 
     terminal_writestring("\n=== MyKernel Settings ===\n");
