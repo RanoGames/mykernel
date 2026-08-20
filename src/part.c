@@ -31,8 +31,21 @@ int part_create_mbr_fat32(uint32_t start_lba, uint32_t size_sectors) {
     if (start_lba < 1) start_lba = 2048;
     if (size_sectors == 0) size_sectors = 262144;
 
-    mem0(sec, 512);
-    sec[0] = 0xEB; sec[1] = 0x3C; sec[2] = 0x90;
+    /* Preserve existing MBR bootstrap (bytes 0..445) if present */
+    if (ata_read_sectors(0, 1, sec) != 0)
+        mem0(sec, 512);
+    int has_code = 0;
+    for (int i = 0; i < 3; i++)
+        if (sec[i] != 0) has_code = 1;
+    if (!has_code) {
+        /* No bootloader: minimal halt stub (install may overlay real MBR later) */
+        mem0(sec, 512);
+        sec[0] = 0xFA; /* cli */
+        sec[1] = 0xF4; /* hlt */
+        sec[2] = 0xEB; sec[3] = 0xFD; /* jmp $ */
+    }
+    /* Only rewrite partition table + signature */
+    for (int i = 446; i < 510; i++) sec[i] = 0;
     uint8_t* e = &sec[446];
     e[0] = 0x80; /* bootable */
     e[4] = 0x0C;

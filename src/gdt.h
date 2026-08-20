@@ -2,14 +2,14 @@
 #define GDT_H
 #include <stdint.h>
 
-/* Selectors */
 #define GDT_KCODE  0x08
 #define GDT_KDATA  0x10
-#define GDT_UCODE  0x18  /* RPL will be | 3 → 0x1B */
-#define GDT_UDATA  0x20  /* RPL | 3 → 0x23 */
+#define GDT_UCODE  0x18
+#define GDT_UDATA  0x20
 #define GDT_TSS    0x28
 
 void gdt_install(void);
+void gdt_init(void); /* same as gdt_install — kernel_main calls this */
 void tss_set_kernel_stack(uint32_t esp0);
 
 #endif

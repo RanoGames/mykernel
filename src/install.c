@@ -45,7 +45,13 @@ static int install_bootloader(void) {
     const char* s2_end = _binary_build_stage2_bin_end;
 
     if (!mbr || !mbr_end || mbr_end <= mbr) {
-        step("WARN: mbr.bin not linked — using part MBR only");
+        step("WARN: mbr.bin not linked — partition table only (rebuild host disk.img for boot code)");
+        part_create_mbr_fat32(2048, 262144);
+        /* still try stage2 if linked */
+        if (s2 && s2_end && s2_end > s2) {
+            if (write_raw(STAGE2_LBA, s2, (uint32_t)(s2_end - s2)) != 0) return -1;
+            step("stage2 written");
+        }
         return 0;
     }
     uint8_t sec[512];
@@ -115,8 +121,11 @@ int install_run(void) {
 
     step("2/6 GPT (optional secondary layout)...");
     part_create_gpt_fat32(start, size);
-    /* MBR already written by bootloader path; GPT protective may overwrite — rewrite hybrid MBR */
-    install_bootloader();
+    /* GPT wiped LBA0 — restore FAT32 partition entry WITHOUT killing bootstrap if any */
+    part_create_mbr_fat32(start, size);
+    /* Write real MBR+stage2 last so install always leaves a bootable disk */
+    step("2b/6 Re-write MBR+stage2 after GPT...");
+    if (install_bootloader() != 0) { step("FAIL: bootloader rewrite"); return -1; }
 
     step("3/6 FAT32 mkfs @ LBA 2048...");
     if (fat32_mkfs(start, size) != FAT_OK) { step("FAIL: mkfs"); return -1; }

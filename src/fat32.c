@@ -126,6 +126,17 @@ static int find_fat_partition(void) {
             return 0;
         }
     }
+    /* Hybrid / GPT-only disk: probe common FAT32 start LBA 2048 */
+    if (ata_read_sectors(2048, 1, sector_buf) == 0) {
+        struct fat32_bpb* b = (struct fat32_bpb*)sector_buf;
+        if (b->bytes_per_sector == 512 && b->fat_size_32 != 0 &&
+            b->sectors_per_cluster >= 1 && b->sectors_per_cluster <= 64 &&
+            (b->fs_type[0] == 'F' || b->boot_signature == 0x29 ||
+             (sector_buf[510] == 0x55 && sector_buf[511] == 0xAA))) {
+            partition_lba = 2048;
+            return 0;
+        }
+    }
     return -1;
 }
 
@@ -362,32 +373,50 @@ void fat32_set_partition_lba(uint32_t lba) {
     mounted = 0;
 }
 
+static int try_mount_at(uint32_t lba) {
+    partition_lba = lba;
+    if (read_sector(0) != 0)
+        return -1;
+    struct fat32_bpb* bpb = (struct fat32_bpb*)sector_buf;
+    if (bpb->bytes_per_sector != 512 || bpb->fat_size_32 == 0)
+        return -1;
+    if (bpb->sectors_per_cluster == 0 || bpb->sectors_per_cluster > 64)
+        return -1;
+
+    sectors_per_cluster = bpb->sectors_per_cluster;
+    fat_size_sectors = bpb->fat_size_32;
+    num_fats = bpb->num_fats ? bpb->num_fats : 2;
+    fat_start = bpb->reserved_sectors;
+    data_start = bpb->reserved_sectors + (uint32_t)num_fats * fat_size_sectors;
+    root_cluster = bpb->root_cluster ? bpb->root_cluster : 2;
+    uint32_t total_sectors = bpb->total_sectors_16 ? bpb->total_sectors_16 : bpb->total_sectors_32;
+    if (total_sectors > data_start)
+        total_clusters = (total_sectors - data_start) / sectors_per_cluster;
+    else
+        total_clusters = 0x10000;
+    return 0;
+}
+
 int fat32_mount(void) {
     mounted = 0;
     if (!ata_present()) {
         if (ata_init() != 0)
             return FAT_ERR_NO_DISK;
     }
+
+    /* 1) Explicit LBA from fat32_set_partition_lba / mkfs */
+    uint32_t prefer = partition_lba;
+    if (prefer != 0 && try_mount_at(prefer) == 0) {
+        mounted = 1;
+        return FAT_OK;
+    }
+
+    /* 2) MBR / probe */
     if (find_fat_partition() != 0)
         return FAT_ERR_NOT_FAT32;
-    if (read_sector(0) != 0)
-        return FAT_ERR_IO;
-
-    struct fat32_bpb* bpb = (struct fat32_bpb*)sector_buf;
-    if (bpb->bytes_per_sector != 512 || bpb->fat_size_32 == 0)
-        return FAT_ERR_NOT_FAT32;
-    if (bpb->sectors_per_cluster == 0 || bpb->sectors_per_cluster > 8)
+    if (try_mount_at(partition_lba) != 0)
         return FAT_ERR_NOT_FAT32;
 
-    sectors_per_cluster = bpb->sectors_per_cluster;
-    fat_size_sectors = bpb->fat_size_32;
-    num_fats = bpb->num_fats;
-    fat_start = bpb->reserved_sectors;
-    data_start = bpb->reserved_sectors + (uint32_t)num_fats * fat_size_sectors;
-    root_cluster = bpb->root_cluster;
-
-    uint32_t total_sectors = bpb->total_sectors_16 ? bpb->total_sectors_16 : bpb->total_sectors_32;
-    total_clusters = (total_sectors - data_start) / sectors_per_cluster;
     mounted = 1;
     return FAT_OK;
 }

@@ -156,7 +156,8 @@ endif
 # Host-side disk image with kernel embedded (preferred installer image)
 .PHONY: disk.img
 disk.img: $(BUILD_DIR)/mykernel.bin $(BUILD_DIR)/mbr.bin $(BUILD_DIR)/stage2.bin
-	python3 boot/mkdisk.py $(BUILD_DIR)/mykernel.bin $(BUILD_DIR)/mbr.bin $(BUILD_DIR)/stage2.bin disk.img
+	objcopy -O binary $(BUILD_DIR)/mykernel.bin $(BUILD_DIR)/mykernel.raw
+	python3 boot/mkdisk.py $(BUILD_DIR)/mykernel.bin $(BUILD_DIR)/mbr.bin $(BUILD_DIR)/stage2.bin disk.img $(BUILD_DIR)/mykernel.raw
 	@echo "Created disk.img — boot: qemu-system-i386 -hda disk.img -m 128"
 
 

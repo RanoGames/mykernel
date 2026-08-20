@@ -68,6 +68,10 @@ void tss_set_kernel_stack(uint32_t esp0) {
     tss.esp0 = esp0;
 }
 
+void gdt_init(void) {
+    gdt_install();
+}
+
 void gdt_install(void) {
     gdtp.limit = sizeof(gdt) - 1;
     gdtp.base  = (uint32_t)&gdt;
