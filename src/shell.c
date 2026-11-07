@@ -43,7 +43,7 @@ static char history[HISTORY_SIZE][CMD_BUFFER_SIZE];
 static int history_count = 0;
 static int history_pos = 0;
 
-static void execute_command(const char* line);
+void shell_execute_command(const char* line);
 
 static void history_add(const char* line) {
     if (line[0] == '\0') return;
@@ -530,7 +530,7 @@ static void cmd_run(const char* arg) {
         terminal_writestring("+ ");
         terminal_writestring(p);
         terminal_putchar('\n');
-        execute_command(p);
+        shell_execute_command(p);
     }
 }
 
@@ -616,11 +616,19 @@ static void cmd_beep97(const char* arg) {
 }
 
 static void cmd_snake(void) {
+    if (desktop_is_running()) {
+        terminal_writestring("Please exit desktop (ESC) to play Snake.\n");
+        return;
+    }
     terminal_writestring("Snake: arrows/WASD, Q=quit\n");
     snake_run();
 }
 
 static void cmd_pong(void) {
+    if (desktop_is_running()) {
+        terminal_writestring("Please exit desktop (ESC) to play Pong.\n");
+        return;
+    }
     terminal_writestring("Pong: W/S left, arrows right, Q=quit\n");
     pong_run();
 }
@@ -642,10 +650,30 @@ static void cmd_spawn(void) {
     }
 }
 
-static void cmd_settings(void) { settings_menu(); }
-static void cmd_vbetest(void) { vbe_probe(); vbe_demo(); }
+static void cmd_settings(void) {
+    if (desktop_is_running()) {
+        terminal_writestring("Please exit desktop (ESC) to open Settings.\n");
+        return;
+    }
+    settings_menu();
+}
 
-static void cmd_desktop(void) { desktop_run(); }
+static void cmd_vbetest(void) {
+    if (desktop_is_running()) {
+        terminal_writestring("Please exit desktop (ESC) to run VBE demo.\n");
+        return;
+    }
+    vbe_probe();
+    vbe_demo();
+}
+
+static void cmd_desktop(void) {
+    if (desktop_is_running()) {
+        terminal_writestring("Desktop is already running.\n");
+        return;
+    }
+    desktop_run();
+}
 
 static void cmd_lang(const char* arg) {
     if (arg[0] != '\0') {
@@ -695,7 +723,7 @@ static void cmd_lang(const char* arg) {
     }
 }
 
-static void execute_command(const char* line) {
+void shell_execute_command(const char* line) {
     if (line[0] == '\0') return;
     else if (str_equals(line, "help")) cmd_help();
     else if (str_equals(line, "clear")) terminal_initialize();
@@ -778,6 +806,6 @@ void shell_run(void) {
         terminal_writestring("> ");
         read_line(line, CMD_BUFFER_SIZE);
         history_add(line);
-        execute_command(line);
+        shell_execute_command(line);
     }
 }

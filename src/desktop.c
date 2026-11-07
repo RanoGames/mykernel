@@ -12,6 +12,14 @@
 #include "platform.h"
 #include "power.h"
 #include "sched.h"
+#include "shell.h"
+#include "fs.h"
+
+static int g_desktop_running = 0;
+
+int desktop_is_running(void) {
+    return g_desktop_running;
+}
 
 static void u32_to_str(uint32_t v, char* out) {
     char tmp[12];
@@ -329,30 +337,105 @@ static void calc_on_click(int lx, int ly) {
 }
 
 /* ---- Terminal Application ---- */
-#define TERM_MAX_LINES 12
-#define TERM_LINE_LEN 52
+#define TERM_MAX_LINES 64
+#define TERM_LINE_LEN  64
 static char term_lines[TERM_MAX_LINES][TERM_LINE_LEN];
 static uint32_t term_cols[TERM_MAX_LINES];
 static int term_num_lines = 0;
+static int term_cur_col = 0;
 static char term_input[TERM_LINE_LEN];
 static int term_in_pos = 0;
 
-static void term_append(const char* s, uint32_t col) {
-    if (term_num_lines >= TERM_MAX_LINES) {
-        for (int i = 0; i < TERM_MAX_LINES - 1; i++) {
-            for (int j = 0; j < TERM_LINE_LEN; j++) term_lines[i][j] = term_lines[i+1][j];
-            term_cols[i] = term_cols[i+1];
+#define TERM_HIST_MAX 16
+static char term_hist[TERM_HIST_MAX][TERM_LINE_LEN];
+static int term_hist_count = 0;
+static int term_hist_idx = 0;
+
+static void paint_term(struct mk_surface* s);
+static void on_close_id(int id);
+
+static void desktop_term_putchar(char c) {
+    if (c == '\r') {
+        term_cur_col = 0;
+        return;
+    }
+    if (c == '\n') {
+        if (term_num_lines < TERM_MAX_LINES) {
+            term_lines[term_num_lines][term_cur_col] = '\0';
         }
-        term_num_lines = TERM_MAX_LINES - 1;
+        term_cur_col = 0;
+        term_num_lines++;
+        if (term_num_lines >= TERM_MAX_LINES) {
+            for (int i = 0; i < TERM_MAX_LINES - 1; i++) {
+                for (int j = 0; j < TERM_LINE_LEN; j++)
+                    term_lines[i][j] = term_lines[i + 1][j];
+                term_cols[i] = term_cols[i + 1];
+            }
+            term_num_lines = TERM_MAX_LINES - 1;
+        }
+        term_lines[term_num_lines][0] = '\0';
+        term_cols[term_num_lines] = 0x00DDDDDD;
+
+        static uint32_t last_term_compose = 0;
+        uint32_t now = timer_ticks();
+        if (surface_alive(id_term) && (now - last_term_compose) >= 5) {
+            last_term_compose = now;
+            paint_term(mk_surface_get(id_term));
+            mk_surface_commit(id_term);
+            mk_compose();
+        }
+        return;
     }
-    int i = 0;
-    while (s && s[i] && i < TERM_LINE_LEN - 1) {
-        term_lines[term_num_lines][i] = s[i];
-        i++;
+    if (c == '\b') {
+        if (term_cur_col > 0) {
+            term_cur_col--;
+            term_lines[term_num_lines][term_cur_col] = '\0';
+        }
+        return;
     }
-    term_lines[term_num_lines][i] = '\0';
-    term_cols[term_num_lines] = col;
-    term_num_lines++;
+    if (c == '\t') {
+        for (int t = 0; t < 4; t++) desktop_term_putchar(' ');
+        return;
+    }
+    if ((uint8_t)c >= 32 && (uint8_t)c <= 126) {
+        if (term_cur_col >= TERM_LINE_LEN - 1) {
+            term_lines[term_num_lines][term_cur_col] = '\0';
+            term_cur_col = 0;
+            term_num_lines++;
+            if (term_num_lines >= TERM_MAX_LINES) {
+                for (int i = 0; i < TERM_MAX_LINES - 1; i++) {
+                    for (int j = 0; j < TERM_LINE_LEN; j++)
+                        term_lines[i][j] = term_lines[i + 1][j];
+                    term_cols[i] = term_cols[i + 1];
+                }
+                term_num_lines = TERM_MAX_LINES - 1;
+            }
+            term_lines[term_num_lines][0] = '\0';
+            term_cols[term_num_lines] = 0x00DDDDDD;
+        }
+        term_lines[term_num_lines][term_cur_col++] = c;
+        term_lines[term_num_lines][term_cur_col] = '\0';
+        term_cols[term_num_lines] = 0x00DDDDDD;
+    }
+}
+
+static void desktop_term_clear(void) {
+    for (int i = 0; i < TERM_MAX_LINES; i++) {
+        term_lines[i][0] = '\0';
+        term_cols[i] = 0x00DDDDDD;
+    }
+    term_num_lines = 0;
+    term_cur_col = 0;
+}
+
+static void term_append(const char* s, uint32_t col) {
+    while (s && *s) {
+        desktop_term_putchar(*s++);
+    }
+    if (col && term_num_lines > 0) {
+        term_cols[term_num_lines - 1] = col;
+    }
+    desktop_term_putchar('\n');
 }
 
 static void paint_term(struct mk_surface* s) {
@@ -360,90 +443,107 @@ static void paint_term(struct mk_surface* s) {
     mk_buf_fill(s->pixels, s->w, s->h, 0x000F141C);
     /* Terminal header */
     mk_buf_rect(s->pixels, s->w, s->h, 0, 0, s->w, 20, 0x001B2230);
-    mk_buf_text(s->pixels, s->w, s->h, 8, 2, "MyKernel Terminal (bash/sh)", 0x00A0C0E0, 0x001B2230);
+    mk_buf_text(s->pixels, s->w, s->h, 8, 2, "MyKernel Shell (Native Terminal)", 0x00A0C0E0, 0x001B2230);
+
+    int max_visible = (s->h - 44) / 16;
+    if (max_visible < 1) max_visible = 1;
+
+    int total_lines = term_num_lines + (term_cur_col > 0 ? 1 : 0);
+    int start = 0;
+    if (total_lines > max_visible) {
+        start = total_lines - max_visible;
+    }
 
     int y = 24;
-    for (int i = 0; i < term_num_lines; i++) {
-        mk_buf_text(s->pixels, s->w, s->h, 8, y, term_lines[i], term_cols[i], 0x000F141C);
+    for (int i = start; i < total_lines; i++) {
+        if (i < term_num_lines) {
+            mk_buf_text(s->pixels, s->w, s->h, 8, y, term_lines[i], term_cols[i], 0x000F141C);
+        } else {
+            /* Current in-progress line */
+            mk_buf_text(s->pixels, s->w, s->h, 8, y, term_lines[term_num_lines], 0x00DDDDDD, 0x000F141C);
+        }
         y += 16;
     }
 
     /* Prompt line */
-    char prompt[64];
+    char pwd[48];
+    fs_pwd(pwd, sizeof(pwd));
+    char prompt[TERM_LINE_LEN];
     int pi = 0;
-    prompt[pi++] = '/'; prompt[pi++] = '>'; prompt[pi++] = ' ';
-    for (int i = 0; i < term_in_pos && pi < 58; i++) prompt[pi++] = term_input[i];
+    for (int i = 0; pwd[i] && pi < 20; i++) prompt[pi++] = pwd[i];
+    prompt[pi++] = '>';
+    prompt[pi++] = ' ';
+    for (int i = 0; i < term_in_pos && pi < TERM_LINE_LEN - 3; i++) prompt[pi++] = term_input[i];
     prompt[pi++] = '_';
     prompt[pi] = '\0';
-    mk_buf_text(s->pixels, s->w, s->h, 8, y, prompt, 0x0000FF66, 0x000F141C);
+    mk_buf_text(s->pixels, s->w, s->h, 8, s->h - 18, prompt, 0x0000FF66, 0x000F141C);
 }
 
-static void on_close_id(int id);
-
 static void term_exec_cmd(void) {
-    char prompt_echo[64];
-    prompt_echo[0] = '/'; prompt_echo[1] = '>'; prompt_echo[2] = ' ';
-    int pi = 3;
-    for (int i = 0; i < term_in_pos && pi < 58; i++) prompt_echo[pi++] = term_input[i];
-    prompt_echo[pi] = '\0';
-    term_append(prompt_echo, 0x00FFFFFF);
+    char pwd[48];
+    fs_pwd(pwd, sizeof(pwd));
+
+    /* Echo prompt and command into terminal output */
+    for (int i = 0; pwd[i]; i++) desktop_term_putchar(pwd[i]);
+    desktop_term_putchar('>');
+    desktop_term_putchar(' ');
+    for (int i = 0; i < term_in_pos; i++) desktop_term_putchar(term_input[i]);
+    desktop_term_putchar('\n');
+    if (term_num_lines > 0) {
+        term_cols[term_num_lines - 1] = 0x00FFFFFF;
+    }
 
     char* cmd = term_input;
     while (*cmd == ' ') cmd++;
     if (*cmd == '\0') {
         term_in_pos = 0;
+        term_input[0] = '\0';
         return;
     }
 
-    if (desk_streq(cmd, "help")) {
-        term_append("Commands: help, clear, ping, sysinfo, ver, uptime, echo, exit", 0x00FFFF77);
-    } else if (desk_streq(cmd, "clear") || desk_streq(cmd, "cls")) {
-        term_num_lines = 0;
-    } else if (desk_streq(cmd, "ver")) {
-        term_append("MyKernel OS v0.3 (i686 ELF32 / Desktop GUI)", 0x0000FF66);
-    } else if (desk_streq(cmd, "uptime")) {
-        char ut[48];
-        format_uptime(ut, timer_ticks(), timer_hz());
-        char out[64];
-        int oi = 0;
-        const char* prefix = "Uptime: ";
-        while (*prefix) out[oi++] = *prefix++;
-        for (int j = 0; ut[j]; j++) out[oi++] = ut[j];
-        out[oi] = '\0';
-        term_append(out, 0x00FFFFFF);
-    } else if (desk_streq(cmd, "sysinfo")) {
-        term_append("Kernel: MyKernel 32-bit x86 Protected Mode", 0x0088CCFF);
-        term_append("Driver: RTL8139 Fast Ethernet (IP 10.0.2.15)", 0x0088CCFF);
-        term_append("Gateway: 10.0.2.2 | DNS: 10.0.2.3", 0x0088CCFF);
-    } else if (cmd[0] == 'p' && cmd[1] == 'i' && cmd[2] == 'n' && cmd[3] == 'g') {
-        if (cmd[4] == '\0' || desk_streq(cmd + 5, "10.0.2.2") || desk_streq(cmd + 5, "gateway")) {
-            term_append("PING 10.0.2.2: 64 bytes, ttl=255, time=<1 ms", 0x0000FF66);
-            term_append("PING 10.0.2.2: 64 bytes, ttl=255, time=<1 ms", 0x0000FF66);
-            term_append("--- 10.0.2.2: 2 transmitted, 2 received, 0% loss ---", 0x0088CCFF);
-        } else if (desk_streq(cmd + 5, "10.0.2.3")) {
-            term_append("PING 10.0.2.3 (DNS): 64 bytes, ttl=255, time=<1 ms", 0x0000FF66);
-            term_append("--- 10.0.2.3: 1 transmitted, 1 received, 0% loss ---", 0x0088CCFF);
-        } else if (desk_streq(cmd + 5, "127.0.0.1") || desk_streq(cmd + 5, "localhost")) {
-            term_append("PING 127.0.0.1 (loopback): 64 bytes, time=<1 ms", 0x0000FF66);
-            term_append("--- 127.0.0.1: 1 transmitted, 1 received, 0% loss ---", 0x0088CCFF);
-        } else if (cmd[5] == '1' && cmd[6] == '9' && cmd[7] == '2') {
-            term_append("Notice: In QEMU NAT, virtual router is 10.0.2.2", 0x00FFBB00);
-            term_append("Host LAN is isolated; try: ping 10.0.2.2", 0x00CCCCCC);
+    /* Add to command history */
+    if (term_hist_count == 0 || !desk_streq(term_hist[term_hist_count - 1], cmd)) {
+        if (term_hist_count < TERM_HIST_MAX) {
+            int ci = 0;
+            while (cmd[ci] && ci < TERM_LINE_LEN - 1) {
+                term_hist[term_hist_count][ci] = cmd[ci];
+                ci++;
+            }
+            term_hist[term_hist_count][ci] = '\0';
+            term_hist_count++;
         } else {
-            term_append("PING host: packet sent via RTL8139 (10.0.2.2)", 0x00CCCCCC);
+            for (int i = 0; i < TERM_HIST_MAX - 1; i++) {
+                for (int j = 0; j < TERM_LINE_LEN; j++)
+                    term_hist[i][j] = term_hist[i + 1][j];
+            }
+            int ci = 0;
+            while (cmd[ci] && ci < TERM_LINE_LEN - 1) {
+                term_hist[TERM_HIST_MAX - 1][ci] = cmd[ci];
+                ci++;
+            }
+            term_hist[TERM_HIST_MAX - 1][ci] = '\0';
         }
-    } else if (cmd[0] == 'e' && cmd[1] == 'c' && cmd[2] == 'h' && cmd[3] == 'o' && cmd[4] == ' ') {
-        term_append(cmd + 5, 0x00FFFFFF);
-    } else if (desk_streq(cmd, "exit")) {
+    }
+    term_hist_idx = term_hist_count;
+
+    if (desk_streq(cmd, "exit") || desk_streq(cmd, "quit")) {
         on_close_id(id_term);
         mk_surface_destroy(id_term);
         if (active_focus_id == id_term) active_focus_id = -1;
         term_in_pos = 0;
+        term_input[0] = '\0';
         return;
-    } else {
-        term_append("Command not found. Type 'help'.", 0x00FF6666);
     }
+
+    /* Execute via kernel shell engine */
+    terminal_set_putchar_hook(desktop_term_putchar);
+    terminal_set_clear_hook(desktop_term_clear);
+    shell_execute_command(cmd);
+    terminal_set_putchar_hook(0);
+    terminal_set_clear_hook(0);
+
     term_in_pos = 0;
+    term_input[0] = '\0';
 }
 
 static void paint_about(struct mk_surface* s) {
@@ -539,11 +639,11 @@ static void open_term(void) {
         active_focus_id = id_term;
         return;
     }
-    if (term_num_lines == 0) {
-        term_append("MyKernel Desktop Terminal v1.0", 0x0000FF66);
+    if (term_num_lines == 0 && term_cur_col == 0) {
+        term_append("MyKernel Shell v0.3 (i686 Protected Mode)", 0x0000FF66);
         term_append("Type 'help' for commands, 'exit' to close", 0x0088CCFF);
     }
-    OPEN_APP(id_term, 440, 240, "Terminal", paint_term);
+    OPEN_APP(id_term, 480, 270, "Terminal", paint_term);
     active_focus_id = id_term;
 }
 
@@ -760,8 +860,10 @@ static void desktop_overlay_paint(void) {
 }
 
 void desktop_run(void) {
+    g_desktop_running = 1;
     if (platform_is_virtualbox()) {
         terminal_writestring("desktop: needs Bochs VBE (QEMU). Not supported on VirtualBox.\n");
+        g_desktop_running = 0;
         return;
     }
 
@@ -832,14 +934,42 @@ void desktop_run(void) {
                     if (term_in_pos > 0) {
                         term_input[--term_in_pos] = '\0';
                     }
-                } else if (k >= ' ' && k <= '~') {
+                } else if (k == KEY_UP) {
+                    if (term_hist_count > 0 && term_hist_idx > 0) {
+                        term_hist_idx--;
+                        int ci = 0;
+                        while (term_hist[term_hist_idx][ci] && ci < TERM_LINE_LEN - 1) {
+                            term_input[ci] = term_hist[term_hist_idx][ci];
+                            ci++;
+                        }
+                        term_input[ci] = '\0';
+                        term_in_pos = ci;
+                    }
+                } else if (k == KEY_DOWN) {
+                    if (term_hist_idx < term_hist_count - 1) {
+                        term_hist_idx++;
+                        int ci = 0;
+                        while (term_hist[term_hist_idx][ci] && ci < TERM_LINE_LEN - 1) {
+                            term_input[ci] = term_hist[term_hist_idx][ci];
+                            ci++;
+                        }
+                        term_input[ci] = '\0';
+                        term_in_pos = ci;
+                    } else if (term_hist_idx == term_hist_count - 1) {
+                        term_hist_idx++;
+                        term_input[0] = '\0';
+                        term_in_pos = 0;
+                    }
+                } else if ((uint8_t)k >= ' ' && (uint8_t)k <= '~') {
                     if (term_in_pos < TERM_LINE_LEN - 4) {
                         term_input[term_in_pos++] = k;
                         term_input[term_in_pos] = '\0';
                     }
                 }
-                paint_term(mk_surface_get(id_term));
-                mk_surface_commit(id_term);
+                if (surface_alive(id_term)) {
+                    paint_term(mk_surface_get(id_term));
+                    mk_surface_commit(id_term);
+                }
                 need_redraw = 1;
             }
         }
@@ -987,6 +1117,7 @@ void desktop_run(void) {
     }
 
 done:
+    g_desktop_running = 0;
     mk_set_desktop_layer(0);
     mk_set_desktop_overlay(0);
     mk_shutdown();

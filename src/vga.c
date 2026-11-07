@@ -117,7 +117,22 @@ static void terminal_scroll(void) {
     terminal_row = VGA_TEXT_H - 1;
 }
 
+static terminal_putchar_hook_t g_putchar_hook = 0;
+static terminal_clear_hook_t g_clear_hook = 0;
+
+void terminal_set_putchar_hook(terminal_putchar_hook_t hook) {
+    g_putchar_hook = hook;
+}
+
+void terminal_set_clear_hook(terminal_clear_hook_t hook) {
+    g_clear_hook = hook;
+}
+
 void terminal_initialize(void) {
+    if (g_clear_hook) {
+        g_clear_hook();
+        return;
+    }
     terminal_row = 0;
     terminal_column = 0;
     terminal_color = vga_entry_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
@@ -171,6 +186,11 @@ size_t terminal_cols(void) { return term_cols; }
 size_t terminal_rows(void) { return term_rows; }
 
 void terminal_putchar(char c) {
+    if (g_putchar_hook) {
+        g_putchar_hook(c);
+        serial_putchar(c);
+        return;
+    }
     serial_putchar(c);
     if (c == '\n') {
         if (fb_mode) fb_fill_cell(terminal_column, terminal_row, fb_bg);

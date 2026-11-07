@@ -25,6 +25,11 @@ enum vga_color {
     VGA_COLOR_WHITE = 15,
 };
 
+typedef void (*terminal_putchar_hook_t)(char c);
+typedef void (*terminal_clear_hook_t)(void);
+void terminal_set_putchar_hook(terminal_putchar_hook_t hook);
+void terminal_set_clear_hook(terminal_clear_hook_t hook);
+
 void terminal_initialize(void);
 void terminal_setcolor(uint8_t color);
 void terminal_putchar(char c);
