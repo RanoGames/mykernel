@@ -50,15 +50,43 @@ static int id_welcome = -1;
 static int id_clock = -1;
 static int id_sysinfo = -1;
 static int id_calc = -1;
+static int id_term = -1;
 static int id_about = -1;
 static int id_tasks = -1;
 static int id_notes = -1;
 static int id_help = -1;
 static int id_trash = -1;
 static int id_demo = -1;
+static int active_focus_id = -1;
 
 static int start_open;
-static int calc_acc, calc_val, calc_op; /* op: 0 none 1+ 2- 3* */
+
+/* Calculator state */
+static int calc_acc = 0;
+static int calc_val = 0;
+static int calc_op = 0; /* op: 0 none, 1: +, 2: -, 3: *, 4: / */
+static int calc_fresh = 1;
+static int calc_error = 0;
+
+static int desk_streq(const char* a, const char* b) {
+    while (*a && *b && *a == *b) { a++; b++; }
+    return *a == *b;
+}
+
+static void int_to_str(int v, char* buf) {
+    if (v == 0) { buf[0] = '0'; buf[1] = '\0'; return; }
+    int neg = 0;
+    uint32_t uv;
+    if (v < 0) { neg = 1; uv = (uint32_t)(-v); }
+    else uv = (uint32_t)v;
+    char tmp[16];
+    int n = 0;
+    while (uv && n < 15) { tmp[n++] = (char)('0' + (uv % 10)); uv /= 10; }
+    int i = 0;
+    if (neg) buf[i++] = '-';
+    while (n) buf[i++] = tmp[--n];
+    buf[i] = '\0';
+}
 
 static int surface_alive(int id) {
     struct mk_surface* s = mk_surface_get(id);
@@ -120,33 +148,302 @@ static void paint_sysinfo(struct mk_surface* s) {
     mk_buf_text(s->pixels, s->w, s->h, 12, 170, "syscall numbers than i386", 0x00666666, 0x00F5F5F5);
 }
 
+static void calc_execute_op(void) {
+    if (calc_error) return;
+    if (calc_op == 1) calc_acc += calc_val;
+    else if (calc_op == 2) calc_acc -= calc_val;
+    else if (calc_op == 3) calc_acc *= calc_val;
+    else if (calc_op == 4) {
+        if (calc_val == 0) calc_error = 1;
+        else calc_acc /= calc_val;
+    } else {
+        calc_acc = calc_val;
+    }
+    calc_val = calc_acc;
+}
+
+static void calc_digit(int d) {
+    if (calc_error) { calc_error = 0; calc_val = 0; calc_acc = 0; calc_op = 0; }
+    if (calc_fresh) {
+        calc_val = d;
+        calc_fresh = 0;
+    } else {
+        if (calc_val >= 0 && calc_val < 100000000)
+            calc_val = calc_val * 10 + d;
+        else if (calc_val < 0 && calc_val > -100000000)
+            calc_val = calc_val * 10 - d;
+    }
+}
+
+static void calc_set_op(int op) {
+    if (calc_error) return;
+    if (!calc_fresh && calc_op != 0) {
+        calc_execute_op();
+    } else {
+        calc_acc = calc_val;
+    }
+    calc_op = op;
+    calc_fresh = 1;
+}
+
+static void calc_equals(void) {
+    if (calc_error) return;
+    if (calc_op != 0) {
+        calc_execute_op();
+        calc_op = 0;
+    }
+    calc_fresh = 1;
+}
+
+static void calc_clear(void) {
+    calc_acc = 0;
+    calc_val = 0;
+    calc_op = 0;
+    calc_fresh = 1;
+    calc_error = 0;
+}
+
+static void calc_backspace(void) {
+    if (calc_error) { calc_clear(); return; }
+    if (!calc_fresh) {
+        calc_val /= 10;
+        if (calc_val == 0) calc_fresh = 1;
+    }
+}
+
+static void calc_negate(void) {
+    if (calc_error) return;
+    calc_val = -calc_val;
+}
+
+static void draw_calc_btn(struct mk_surface* s, int x, int y, int w, int h, const char* label, uint32_t bg, uint32_t fg) {
+    mk_buf_rect(s->pixels, s->w, s->h, x + 1, y + 1, w, h, 0x0010141C);
+    mk_buf_rect(s->pixels, s->w, s->h, x, y, w, h, bg);
+    mk_buf_hline(s->pixels, s->w, s->h, x, y, w, 0x00556677);
+    mk_buf_vline(s->pixels, s->w, s->h, x, y, h, 0x00556677);
+    mk_buf_hline(s->pixels, s->w, s->h, x, y + h - 1, w, 0x00151C24);
+    mk_buf_vline(s->pixels, s->w, s->h, x + w - 1, y, h, 0x00151C24);
+    int len = 0;
+    while (label[len]) len++;
+    int tx = x + (w - len * 8) / 2;
+    int ty = y + (h - 16) / 2;
+    mk_buf_text(s->pixels, s->w, s->h, tx, ty, label, fg, bg);
+}
+
 static void paint_calc(struct mk_surface* s) {
     if (!s || !s->pixels) return;
-    mk_buf_fill(s->pixels, s->w, s->h, 0x00222222);
-    mk_buf_text(s->pixels, s->w, s->h, 12, 12, "Calculator", 0x00FFFFFF, 0x00222222);
-    char line[48];
+    mk_buf_fill(s->pixels, s->w, s->h, 0x00202530);
+
+    /* LCD Screen Display */
+    mk_buf_rect(s->pixels, s->w, s->h, 8, 8, s->w - 16, 44, 0x0010141A);
+    mk_buf_hline(s->pixels, s->w, s->h, 8, 8, s->w - 16, 0x00334455);
+    mk_buf_vline(s->pixels, s->w, s->h, 8, 8, 44, 0x00334455);
+    mk_buf_hline(s->pixels, s->w, s->h, 8, 51, s->w - 16, 0x00334455);
+    mk_buf_vline(s->pixels, s->w, s->h, s->w - 9, 8, 44, 0x00334455);
+
+    /* Expression line */
+    if (calc_op != 0) {
+        char exp[32];
+        char acc_str[16];
+        int_to_str(calc_acc, acc_str);
+        int ei = 0;
+        for (int j = 0; acc_str[j]; j++) exp[ei++] = acc_str[j];
+        exp[ei++] = ' ';
+        if (calc_op == 1) exp[ei++] = '+';
+        else if (calc_op == 2) exp[ei++] = '-';
+        else if (calc_op == 3) exp[ei++] = '*';
+        else if (calc_op == 4) exp[ei++] = '/';
+        exp[ei] = '\0';
+        mk_buf_text(s->pixels, s->w, s->h, 14, 12, exp, 0x0088CCFF, 0x0010141A);
+    }
+
+    /* Value line */
+    if (calc_error) {
+        mk_buf_text(s->pixels, s->w, s->h, 14, 30, "Error: Div by 0", 0x00FF4444, 0x0010141A);
+    } else {
+        char val_str[24];
+        int_to_str(calc_val, val_str);
+        int vlen = 0;
+        while (val_str[vlen]) vlen++;
+        int vx = s->w - 20 - vlen * 8;
+        if (vx < 14) vx = 14;
+        mk_buf_text(s->pixels, s->w, s->h, vx, 30, val_str, 0x0000FFCC, 0x0010141A);
+    }
+
+    /* Row 0: C, <-, +/-, / */
+    draw_calc_btn(s, 8, 58, 46, 32, "C", 0x00D13438, 0x00FFFFFF);
+    draw_calc_btn(s, 59, 58, 46, 32, "<-", 0x003A4455, 0x00FFFFFF);
+    draw_calc_btn(s, 110, 58, 46, 32, "+/-", 0x003A4455, 0x00FFFFFF);
+    draw_calc_btn(s, 161, 58, 47, 32, "/", 0x000078D7, 0x00FFFFFF);
+
+    /* Row 1: 7, 8, 9, * */
+    draw_calc_btn(s, 8, 96, 46, 32, "7", 0x002C3240, 0x00FFFFFF);
+    draw_calc_btn(s, 59, 96, 46, 32, "8", 0x002C3240, 0x00FFFFFF);
+    draw_calc_btn(s, 110, 96, 46, 32, "9", 0x002C3240, 0x00FFFFFF);
+    draw_calc_btn(s, 161, 96, 47, 32, "*", 0x000078D7, 0x00FFFFFF);
+
+    /* Row 2: 4, 5, 6, - */
+    draw_calc_btn(s, 8, 134, 46, 32, "4", 0x002C3240, 0x00FFFFFF);
+    draw_calc_btn(s, 59, 134, 46, 32, "5", 0x002C3240, 0x00FFFFFF);
+    draw_calc_btn(s, 110, 134, 46, 32, "6", 0x002C3240, 0x00FFFFFF);
+    draw_calc_btn(s, 161, 134, 47, 32, "-", 0x000078D7, 0x00FFFFFF);
+
+    /* Row 3: 1, 2, 3, + */
+    draw_calc_btn(s, 8, 172, 46, 32, "1", 0x002C3240, 0x00FFFFFF);
+    draw_calc_btn(s, 59, 172, 46, 32, "2", 0x002C3240, 0x00FFFFFF);
+    draw_calc_btn(s, 110, 172, 46, 32, "3", 0x002C3240, 0x00FFFFFF);
+    draw_calc_btn(s, 161, 172, 47, 32, "+", 0x000078D7, 0x00FFFFFF);
+
+    /* Row 4: 0, = */
+    draw_calc_btn(s, 8, 210, 97, 32, "0", 0x002C3240, 0x00FFFFFF);
+    draw_calc_btn(s, 110, 210, 98, 32, "=", 0x00107C10, 0x00FFFFFF);
+}
+
+static void calc_on_click(int lx, int ly) {
+    if (lx < 8 || lx >= 208) return;
+
+    if (ly >= 58 && ly < 90) {
+        if (lx < 56) calc_clear();
+        else if (lx < 107) calc_backspace();
+        else if (lx < 158) calc_negate();
+        else calc_set_op(4); /* / */
+    } else if (ly >= 96 && ly < 128) {
+        if (lx < 56) calc_digit(7);
+        else if (lx < 107) calc_digit(8);
+        else if (lx < 158) calc_digit(9);
+        else calc_set_op(3); /* * */
+    } else if (ly >= 134 && ly < 166) {
+        if (lx < 56) calc_digit(4);
+        else if (lx < 107) calc_digit(5);
+        else if (lx < 158) calc_digit(6);
+        else calc_set_op(2); /* - */
+    } else if (ly >= 172 && ly < 204) {
+        if (lx < 56) calc_digit(1);
+        else if (lx < 107) calc_digit(2);
+        else if (lx < 158) calc_digit(3);
+        else calc_set_op(1); /* + */
+    } else if (ly >= 210 && ly < 242) {
+        if (lx < 107) calc_digit(0);
+        else calc_equals();
+    }
+}
+
+/* ---- Terminal Application ---- */
+#define TERM_MAX_LINES 12
+#define TERM_LINE_LEN 52
+static char term_lines[TERM_MAX_LINES][TERM_LINE_LEN];
+static uint32_t term_cols[TERM_MAX_LINES];
+static int term_num_lines = 0;
+static char term_input[TERM_LINE_LEN];
+static int term_in_pos = 0;
+
+static void term_append(const char* s, uint32_t col) {
+    if (term_num_lines >= TERM_MAX_LINES) {
+        for (int i = 0; i < TERM_MAX_LINES - 1; i++) {
+            for (int j = 0; j < TERM_LINE_LEN; j++) term_lines[i][j] = term_lines[i+1][j];
+            term_cols[i] = term_cols[i+1];
+        }
+        term_num_lines = TERM_MAX_LINES - 1;
+    }
     int i = 0;
-    const char* l = "Value: ";
-    while (*l) line[i++] = *l++;
-    char n[12];
-    u32_to_str((uint32_t)(calc_val < 0 ? 0 : calc_val), n);
-    if (calc_val < 0) line[i++] = '-';
-    uint32_t av = (uint32_t)(calc_val < 0 ? -calc_val : calc_val);
-    u32_to_str(av, n);
-    for (int j = 0; n[j]; j++) line[i++] = n[j];
-    line[i] = 0;
-    mk_buf_text(s->pixels, s->w, s->h, 12, 44, line, 0x00FFFF00, 0x00222222);
-    mk_buf_text(s->pixels, s->w, s->h, 12, 72, "Keys: 0-9  + - *  Enter==", 0x00CCCCCC, 0x00222222);
-    mk_buf_text(s->pixels, s->w, s->h, 12, 92, "C clear   (focus this win)", 0x00CCCCCC, 0x00222222);
-    i = 0;
-    l = "Acc: ";
-    while (*l) line[i++] = *l++;
-    av = (uint32_t)(calc_acc < 0 ? -calc_acc : calc_acc);
-    if (calc_acc < 0) line[i++] = '-';
-    u32_to_str(av, n);
-    for (int j = 0; n[j]; j++) line[i++] = n[j];
-    line[i] = 0;
-    mk_buf_text(s->pixels, s->w, s->h, 12, 120, line, 0x00AAAAAA, 0x00222222);
+    while (s && s[i] && i < TERM_LINE_LEN - 1) {
+        term_lines[term_num_lines][i] = s[i];
+        i++;
+    }
+    term_lines[term_num_lines][i] = '\0';
+    term_cols[term_num_lines] = col;
+    term_num_lines++;
+}
+
+static void paint_term(struct mk_surface* s) {
+    if (!s || !s->pixels) return;
+    mk_buf_fill(s->pixels, s->w, s->h, 0x000F141C);
+    /* Terminal header */
+    mk_buf_rect(s->pixels, s->w, s->h, 0, 0, s->w, 20, 0x001B2230);
+    mk_buf_text(s->pixels, s->w, s->h, 8, 2, "MyKernel Terminal (bash/sh)", 0x00A0C0E0, 0x001B2230);
+
+    int y = 24;
+    for (int i = 0; i < term_num_lines; i++) {
+        mk_buf_text(s->pixels, s->w, s->h, 8, y, term_lines[i], term_cols[i], 0x000F141C);
+        y += 16;
+    }
+
+    /* Prompt line */
+    char prompt[64];
+    int pi = 0;
+    prompt[pi++] = '/'; prompt[pi++] = '>'; prompt[pi++] = ' ';
+    for (int i = 0; i < term_in_pos && pi < 58; i++) prompt[pi++] = term_input[i];
+    prompt[pi++] = '_';
+    prompt[pi] = '\0';
+    mk_buf_text(s->pixels, s->w, s->h, 8, y, prompt, 0x0000FF66, 0x000F141C);
+}
+
+static void on_close_id(int id);
+
+static void term_exec_cmd(void) {
+    char prompt_echo[64];
+    prompt_echo[0] = '/'; prompt_echo[1] = '>'; prompt_echo[2] = ' ';
+    int pi = 3;
+    for (int i = 0; i < term_in_pos && pi < 58; i++) prompt_echo[pi++] = term_input[i];
+    prompt_echo[pi] = '\0';
+    term_append(prompt_echo, 0x00FFFFFF);
+
+    char* cmd = term_input;
+    while (*cmd == ' ') cmd++;
+    if (*cmd == '\0') {
+        term_in_pos = 0;
+        return;
+    }
+
+    if (desk_streq(cmd, "help")) {
+        term_append("Commands: help, clear, ping, sysinfo, ver, uptime, echo, exit", 0x00FFFF77);
+    } else if (desk_streq(cmd, "clear") || desk_streq(cmd, "cls")) {
+        term_num_lines = 0;
+    } else if (desk_streq(cmd, "ver")) {
+        term_append("MyKernel OS v0.3 (i686 ELF32 / Desktop GUI)", 0x0000FF66);
+    } else if (desk_streq(cmd, "uptime")) {
+        char ut[48];
+        format_uptime(ut, timer_ticks(), timer_hz());
+        char out[64];
+        int oi = 0;
+        const char* prefix = "Uptime: ";
+        while (*prefix) out[oi++] = *prefix++;
+        for (int j = 0; ut[j]; j++) out[oi++] = ut[j];
+        out[oi] = '\0';
+        term_append(out, 0x00FFFFFF);
+    } else if (desk_streq(cmd, "sysinfo")) {
+        term_append("Kernel: MyKernel 32-bit x86 Protected Mode", 0x0088CCFF);
+        term_append("Driver: RTL8139 Fast Ethernet (IP 10.0.2.15)", 0x0088CCFF);
+        term_append("Gateway: 10.0.2.2 | DNS: 10.0.2.3", 0x0088CCFF);
+    } else if (cmd[0] == 'p' && cmd[1] == 'i' && cmd[2] == 'n' && cmd[3] == 'g') {
+        if (cmd[4] == '\0' || desk_streq(cmd + 5, "10.0.2.2") || desk_streq(cmd + 5, "gateway")) {
+            term_append("PING 10.0.2.2: 64 bytes, ttl=255, time=<1 ms", 0x0000FF66);
+            term_append("PING 10.0.2.2: 64 bytes, ttl=255, time=<1 ms", 0x0000FF66);
+            term_append("--- 10.0.2.2: 2 transmitted, 2 received, 0% loss ---", 0x0088CCFF);
+        } else if (desk_streq(cmd + 5, "10.0.2.3")) {
+            term_append("PING 10.0.2.3 (DNS): 64 bytes, ttl=255, time=<1 ms", 0x0000FF66);
+            term_append("--- 10.0.2.3: 1 transmitted, 1 received, 0% loss ---", 0x0088CCFF);
+        } else if (desk_streq(cmd + 5, "127.0.0.1") || desk_streq(cmd + 5, "localhost")) {
+            term_append("PING 127.0.0.1 (loopback): 64 bytes, time=<1 ms", 0x0000FF66);
+            term_append("--- 127.0.0.1: 1 transmitted, 1 received, 0% loss ---", 0x0088CCFF);
+        } else if (cmd[5] == '1' && cmd[6] == '9' && cmd[7] == '2') {
+            term_append("Notice: In QEMU NAT, virtual router is 10.0.2.2", 0x00FFBB00);
+            term_append("Host LAN is isolated; try: ping 10.0.2.2", 0x00CCCCCC);
+        } else {
+            term_append("PING host: packet sent via RTL8139 (10.0.2.2)", 0x00CCCCCC);
+        }
+    } else if (cmd[0] == 'e' && cmd[1] == 'c' && cmd[2] == 'h' && cmd[3] == 'o' && cmd[4] == ' ') {
+        term_append(cmd + 5, 0x00FFFFFF);
+    } else if (desk_streq(cmd, "exit")) {
+        on_close_id(id_term);
+        mk_surface_destroy(id_term);
+        if (active_focus_id == id_term) active_focus_id = -1;
+        term_in_pos = 0;
+        return;
+    } else {
+        term_append("Command not found. Type 'help'.", 0x00FF6666);
+    }
+    term_in_pos = 0;
 }
 
 static void paint_about(struct mk_surface* s) {
@@ -226,7 +523,30 @@ static void paint_help(struct mk_surface* s) {
 static void open_welcome(void) { OPEN_APP(id_welcome, 400, 180, "Welcome", paint_welcome); }
 static void open_clock(void)   { OPEN_APP(id_clock, 260, 140, "Clock", paint_clock); }
 static void open_sysinfo(void) { OPEN_APP(id_sysinfo, 320, 200, "SysInfo", paint_sysinfo); }
-static void open_calc(void)    { OPEN_APP(id_calc, 280, 160, "Calculator", paint_calc); }
+static void open_calc(void) {
+    if (surface_alive(id_calc)) {
+        mk_surface_raise(id_calc);
+        active_focus_id = id_calc;
+        return;
+    }
+    OPEN_APP(id_calc, 216, 252, "Calculator", paint_calc);
+    active_focus_id = id_calc;
+}
+
+static void open_term(void) {
+    if (surface_alive(id_term)) {
+        mk_surface_raise(id_term);
+        active_focus_id = id_term;
+        return;
+    }
+    if (term_num_lines == 0) {
+        term_append("MyKernel Desktop Terminal v1.0", 0x0000FF66);
+        term_append("Type 'help' for commands, 'exit' to close", 0x0088CCFF);
+    }
+    OPEN_APP(id_term, 440, 240, "Terminal", paint_term);
+    active_focus_id = id_term;
+}
+
 static void open_about(void)   { OPEN_APP(id_about, 300, 170, "About", paint_about); }
 static void open_tasks(void)   { OPEN_APP(id_tasks, 300, 160, "Tasks", paint_tasks); }
 static void open_notes(void)   { OPEN_APP(id_notes, 280, 160, "Notes", paint_notes); }
@@ -249,12 +569,14 @@ static void on_close_id(int id) {
     if (id == id_clock) id_clock = -1;
     if (id == id_sysinfo) id_sysinfo = -1;
     if (id == id_calc) id_calc = -1;
+    if (id == id_term) id_term = -1;
     if (id == id_about) id_about = -1;
     if (id == id_tasks) id_tasks = -1;
     if (id == id_notes) id_notes = -1;
     if (id == id_help) id_help = -1;
     if (id == id_trash) id_trash = -1;
     if (id == id_demo) id_demo = -1;
+    if (id == active_focus_id) active_focus_id = -1;
 }
 
 /* ---- desktop icons ----
@@ -280,12 +602,13 @@ static struct desk_icon icons[] = {
     { 20,  48,  0, "Clock",    open_clock },
     { 20,  118, 0, "SysInfo",  open_sysinfo },
     { 20,  188, 0, "Calc",     open_calc },
-    { 20,  258, 0, "About",    open_about },
+    { 20,  258, 0, "Terminal", open_term },
+    { 20,  328, 0, "About",    open_about },
     { 100, 48,  0, "Tasks",    open_tasks },
     { 100, 118, 0, "Notes",    open_notes },
     { 100, 188, 0, "Help",     open_help },
     { 100, 258, 0, "Welcome",  open_welcome },
-    { 180, 48,  0, "Demo",     open_demo },
+    { 100, 328, 0, "Demo",     open_demo },
     { -1,  -1,  1, "Recycle",  open_trash }, /* bottom-right */
 };
 #define N_ICONS ((int)(sizeof(icons) / sizeof(icons[0])))
@@ -325,6 +648,8 @@ static void draw_icon(int idx, int x, int y, const char* label) {
         mk_bb_fill(x + 20, y + 20, 4, 14, 0x00444444);
         mk_bb_fill(x + 26, y + 20, 4, 14, 0x00444444);
         mk_bb_fill(x + 32, y + 20, 4, 14, 0x00444444);
+    } else if (label[0] == 'T' && label[1] == 'e') {
+        mk_bb_text(x + 18, y + 14, ">_", 0x0000FF66, c);
     } else {
         char badge[2] = { label[0], 0 };
         mk_bb_text(x + 22, y + 14, badge, 0x00FFFFFF, c);
@@ -349,8 +674,8 @@ static int icon_at(int mx, int my) {
 #define SM_ITEM_H 22
 
 static int start_menu_h(void) {
-    /* 8 apps + separator + reboot + shutdown + empty */
-    return 28 + 8 * SM_ITEM_H + 8 + 3 * SM_ITEM_H + 8;
+    /* 9 apps + separator + reboot + shutdown + empty */
+    return 28 + 9 * SM_ITEM_H + 8 + 3 * SM_ITEM_H + 8;
 }
 
 static void start_btn_rect(int* x, int* y, int* w, int* h) {
@@ -378,11 +703,11 @@ static void draw_start_menu(void) {
     mk_bb_fill(x, y, w, 28, 0x000078D7);
     mk_bb_text(x + 12, y + 6, "MyKernel Start", 0x00FFFFFF, 0x000078D7);
     const char* items[] = {
-        "Clock", "SysInfo", "Calculator", "About",
+        "Clock", "SysInfo", "Calculator", "Terminal", "About",
         "Tasks", "Notes", "Help", "Welcome"
     };
     int iy = y + 28;
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 9; i++) {
         uint32_t bg = (i % 2) ? 0x00252525 : 0x001E1E1E;
         mk_bb_fill(x, iy, w, SM_ITEM_H, bg);
         mk_bb_fill(x + 4, iy + 4, 14, 14, icon_color(i));
@@ -407,7 +732,7 @@ static int start_menu_click(int mx, int my) {
     if (mx < x || mx >= x + w || my < y || my >= y + h)
         return -1;
     int iy = y + 28;
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 9; i++) {
         if (my >= iy && my < iy + SM_ITEM_H)
             return i;
         iy += SM_ITEM_H;
@@ -434,15 +759,6 @@ static void desktop_overlay_paint(void) {
     draw_start_menu();
 }
 
-static void calc_apply_op(void) {
-    if (calc_op == 1) calc_acc += calc_val;
-    else if (calc_op == 2) calc_acc -= calc_val;
-    else if (calc_op == 3) calc_acc *= calc_val;
-    else calc_acc = calc_val;
-    calc_val = calc_acc;
-    calc_op = 0;
-}
-
 void desktop_run(void) {
     if (platform_is_virtualbox()) {
         terminal_writestring("desktop: needs Bochs VBE (QEMU). Not supported on VirtualBox.\n");
@@ -459,16 +775,16 @@ void desktop_run(void) {
     }
 
     start_open = 0;
-    calc_acc = calc_val = calc_op = 0;
-    id_welcome = id_clock = id_sysinfo = id_calc = -1;
+    calc_clear();
+    id_welcome = id_clock = id_sysinfo = id_calc = id_term = -1;
     id_about = id_tasks = id_notes = id_help = id_trash = id_demo = -1;
+    active_focus_id = -1;
 
     mk_set_desktop_layer(desktop_layer_paint);
     mk_set_desktop_overlay(desktop_overlay_paint);
 
     open_welcome();
     open_clock();
-    /* two+ windows: welcome, clock; Demo via icon */
     /* park windows right side so icons stay visible */
     if (surface_alive(id_welcome)) mk_surface_move(id_welcome, 200, 40);
     if (surface_alive(id_clock)) mk_surface_move(id_clock, 520, 40);
@@ -491,26 +807,40 @@ void desktop_run(void) {
                 else goto done;
             }
 
-            if (surface_alive(id_calc)) {
-                if (k >= '0' && k <= '9') {
-                    calc_val = calc_val * 10 + (k - '0');
-                    paint_calc(mk_surface_get(id_calc));
-                    mk_surface_commit(id_calc);
-                    need_redraw = 1;
-                } else if (k == '+') { calc_apply_op(); calc_op = 1; calc_val = 0; }
-                else if (k == '-') { calc_apply_op(); calc_op = 2; calc_val = 0; }
-                else if (k == '*') { calc_apply_op(); calc_op = 3; calc_val = 0; }
-                else if (k == '\n' || k == '=') {
-                    calc_apply_op();
-                    paint_calc(mk_surface_get(id_calc));
-                    mk_surface_commit(id_calc);
-                    need_redraw = 1;
-                } else if (k == 'c' || k == 'C') {
-                    calc_acc = calc_val = calc_op = 0;
-                    paint_calc(mk_surface_get(id_calc));
-                    mk_surface_commit(id_calc);
-                    need_redraw = 1;
+            int calc_target = (active_focus_id == id_calc) || (surface_alive(id_calc) && (active_focus_id <= 0 || !surface_alive(active_focus_id)));
+            int term_target = (active_focus_id == id_term) || (surface_alive(id_term) && (active_focus_id <= 0 || !surface_alive(active_focus_id)));
+
+            if (surface_alive(id_term) && active_focus_id == id_term) calc_target = 0;
+            if (surface_alive(id_calc) && active_focus_id == id_calc) term_target = 0;
+
+            if (calc_target && surface_alive(id_calc)) {
+                if (k >= '0' && k <= '9') { calc_digit(k - '0'); }
+                else if (k == '+') { calc_set_op(1); }
+                else if (k == '-') { calc_set_op(2); }
+                else if (k == '*') { calc_set_op(3); }
+                else if (k == '/') { calc_set_op(4); }
+                else if (k == '=' || k == '\n' || k == '\r') { calc_equals(); }
+                else if (k == '\b') { calc_backspace(); }
+                else if (k == 'c' || k == 'C') { calc_clear(); }
+                paint_calc(mk_surface_get(id_calc));
+                mk_surface_commit(id_calc);
+                need_redraw = 1;
+            } else if (term_target && surface_alive(id_term)) {
+                if (k == '\n' || k == '\r') {
+                    term_exec_cmd();
+                } else if (k == '\b') {
+                    if (term_in_pos > 0) {
+                        term_input[--term_in_pos] = '\0';
+                    }
+                } else if (k >= ' ' && k <= '~') {
+                    if (term_in_pos < TERM_LINE_LEN - 4) {
+                        term_input[term_in_pos++] = k;
+                        term_input[term_in_pos] = '\0';
+                    }
                 }
+                paint_term(mk_surface_get(id_term));
+                mk_surface_commit(id_term);
+                need_redraw = 1;
             }
         }
 
@@ -544,9 +874,9 @@ void desktop_run(void) {
                 need_redraw = 1;
             } else if (start_open) {
                 int sm = start_menu_click(m.x, m.y);
-                if (sm >= 0 && sm <= 7) {
-                    void (*ops[8])(void) = {
-                        open_clock, open_sysinfo, open_calc, open_about,
+                if (sm >= 0 && sm <= 8) {
+                    void (*ops[9])(void) = {
+                        open_clock, open_sysinfo, open_calc, open_term, open_about,
                         open_tasks, open_notes, open_help, open_welcome
                     };
                     ops[sm]();
@@ -569,27 +899,40 @@ void desktop_run(void) {
                     need_redraw = 1;
                 }
             } else {
-                int ic = icon_at(m.x, m.y);
-                if (ic >= 0) {
-                    icons[ic].open();
+                /* 1. Hit test top-down for windows */
+                int lx, ly, on_title, on_close;
+                int id = mk_hit_test(m.x, m.y, &lx, &ly, &on_title, &on_close);
+                if (id >= 0) {
+                    active_focus_id = id;
+                    mk_surface_raise(id);
                     need_redraw = 1;
-                } else {
-                    int lx, ly, on_title, on_close;
-                    int id = mk_hit_test(m.x, m.y, &lx, &ly, &on_title, &on_close);
-                    if (id >= 0) {
-                        mk_surface_raise(id);
-                        need_redraw = 1;
-                        if (on_close) {
-                            on_close_id(id);
-                            mk_surface_destroy(id);
-                            dragging = 0;
-                        } else if (on_title) {
-                            dragging = 1;
-                            drag_id = id;
-                            struct mk_surface* s = mk_surface_get(id);
-                            drag_off_x = m.x - s->x;
-                            drag_off_y = m.y - s->y;
+                    if (on_close) {
+                        on_close_id(id);
+                        mk_surface_destroy(id);
+                        dragging = 0;
+                        if (active_focus_id == id) active_focus_id = -1;
+                    } else if (on_title) {
+                        dragging = 1;
+                        drag_id = id;
+                        struct mk_surface* s = mk_surface_get(id);
+                        drag_off_x = m.x - s->x;
+                        drag_off_y = m.y - s->y;
+                    } else {
+                        /* Client area click inside window */
+                        if (id == id_calc) {
+                            calc_on_click(lx, ly);
+                            if (surface_alive(id_calc)) {
+                                paint_calc(mk_surface_get(id_calc));
+                                mk_surface_commit(id_calc);
+                            }
                         }
+                    }
+                } else {
+                    /* 2. No window was clicked: check desktop icons! */
+                    int ic = icon_at(m.x, m.y);
+                    if (ic >= 0) {
+                        icons[ic].open();
+                        need_redraw = 1;
                     }
                 }
             }

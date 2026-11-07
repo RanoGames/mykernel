@@ -120,8 +120,10 @@ void net_init(void) {
 
     g_nic_present = 1;
     terminal_writestring("net: RTL8139 online, MAC=");
+    const char hex_chars[] = "0123456789ABCDEF";
     for (int i = 0; i < 6; i++) {
-        terminal_write_hex((uint32_t)g_mac[i]);
+        terminal_putchar(hex_chars[(g_mac[i] >> 4) & 0x0F]);
+        terminal_putchar(hex_chars[g_mac[i] & 0x0F]);
         if (i < 5) terminal_putchar(':');
     }
     terminal_writestring(", IP=10.0.2.15\n");
@@ -296,8 +298,20 @@ int net_ping(const char* host, int count) {
         return -1;
     }
 
+    if (target_ip[0] == 192 && target_ip[1] == 168) {
+        terminal_writestring("note: in QEMU virtual NAT (-net user), virtual router is 10.0.2.2\n");
+    }
+
     /* External ping over RTL8139 Ethernet */
-    arp_send_request(target_ip);
+    int on_local = (target_ip[0] == g_ip[0] && target_ip[1] == g_ip[1] && target_ip[2] == g_ip[2]);
+    uint8_t arp_target[4];
+    if (on_local) {
+        for (int i = 0; i < 4; i++) arp_target[i] = target_ip[i];
+    } else {
+        /* Default gateway in QEMU virtual network */
+        arp_target[0] = 10; arp_target[1] = 0; arp_target[2] = 2; arp_target[3] = 2;
+    }
+    arp_send_request(arp_target);
     timer_sleep_ms(20);
 
     int received = 0;
