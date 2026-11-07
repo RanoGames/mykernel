@@ -34,7 +34,7 @@ struct tss_entry {
     uint16_t iomap_base;
 } __attribute__((packed));
 
-#define GDT_ENTRIES 6
+#define GDT_ENTRIES 10
 
 static struct gdt_entry gdt[GDT_ENTRIES];
 static struct gdt_ptr   gdtp;
@@ -85,6 +85,21 @@ void gdt_install(void) {
     static uint8_t kstack[8192] __attribute__((aligned(16)));
     write_tss(5, GDT_KDATA, (uint32_t)(kstack + sizeof(kstack)));
 
+    /* Entries 6, 7, 8 for TLS (Thread-Local Storage for Linux / glibc user_desc) */
+    gdt_set_gate(6, 0, 0, 0, 0);
+    gdt_set_gate(7, 0, 0, 0, 0);
+    gdt_set_gate(8, 0, 0, 0, 0);
+    gdt_set_gate(9, 0, 0, 0, 0);
+
     gdt_flush((uint32_t)&gdtp);
     tss_flush();
+}
+
+void gdt_set_tls(int entry_number, uint32_t base, uint32_t limit, int is_pages) {
+    if (entry_number < GDT_TLS_MIN || entry_number > GDT_TLS_MAX)
+        return;
+    uint8_t gran = is_pages ? 0xCF : 0x4F; /* 32-bit segment, page or byte granularity */
+    uint8_t access = 0xF2;                 /* present, ring 3, data read/write */
+    gdt_set_gate(entry_number, base, limit, access, gran);
+    gdt_flush((uint32_t)&gdtp);
 }

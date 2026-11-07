@@ -12,11 +12,15 @@ static void (*g_desktop_layer)(void) = 0;
 static void (*g_desktop_overlay)(void) = 0;
 static uint32_t g_wallpaper = 0x002B579A; /* Win7-ish blue */
 static int g_sw, g_sh;
-/* Off-screen compose buffer (fixed VA, not kmalloc — up to 1024x768x4) */
-#define MK_BACK_BASE 0x00700000u
+/* Off-screen compose buffer (placed at 32 MiB to avoid collision with dyld libs @ 6-14 MiB and mmap arena) */
+#define MK_BACK_BASE 0x02000000u
 #define MK_BACK_MAX  (1024u * 768u * 4u)
 static uint32_t* g_back;
 static int g_back_ok;
+
+/* Window Z-order: 0 is bottom-most, g_z_count-1 is top-most / focused */
+static int g_z_order[MK_MAX_SURFACES];
+static int g_z_count = 0;
 
 /* Cursor underlay to avoid full-screen redraw on mouse move */
 static uint32_t cursor_under[MK_CURSOR_W * MK_CURSOR_H];
@@ -61,6 +65,7 @@ int mk_init(int vbe_mode_id) {
     g_sw = (int)vi->width;
     g_sh = (int)vi->height;
     mouse_set_bounds(g_sw - 1, g_sh - 1);
+    g_z_count = 0;
     for (int i = 0; i < MK_MAX_SURFACES; i++) {
         g_surf[i].used = 0;
         g_surf[i].pixels = 0;
@@ -121,6 +126,7 @@ int mk_surface_create(int w, int h, const char* title) {
     g_surf[id].dirty = 1;
     copy_title(g_surf[id].title, title ? title : "Window", sizeof(g_surf[id].title));
     mk_buf_fill(pix, w, h, 0x00C0C0C0);
+    g_z_order[g_z_count++] = id;
     return id;
 }
 
@@ -130,6 +136,29 @@ void mk_surface_destroy(int id) {
     g_surf[id].pixels = 0;
     g_surf[id].used = 0;
     g_surf[id].mapped = 0;
+
+    int idx = -1;
+    for (int i = 0; i < g_z_count; i++) {
+        if (g_z_order[i] == id) { idx = i; break; }
+    }
+    if (idx >= 0) {
+        for (int i = idx; i < g_z_count - 1; i++)
+            g_z_order[i] = g_z_order[i + 1];
+        g_z_count--;
+    }
+}
+
+void mk_surface_raise(int id) {
+    if (id < 0 || id >= MK_MAX_SURFACES || !g_surf[id].used) return;
+    int idx = -1;
+    for (int i = 0; i < g_z_count; i++) {
+        if (g_z_order[i] == id) { idx = i; break; }
+    }
+    if (idx >= 0) {
+        for (int i = idx; i < g_z_count - 1; i++)
+            g_z_order[i] = g_z_order[i + 1];
+        g_z_order[g_z_count - 1] = id;
+    }
 }
 
 void mk_surface_move(int id, int x, int y) {
@@ -375,12 +404,11 @@ void mk_compose(void) {
     if (g_desktop_layer)
         g_desktop_layer();
 
-    int top = -1;
-    for (int i = 0; i < MK_MAX_SURFACES; i++)
-        if (g_surf[i].used && g_surf[i].mapped)
-            top = i;
+    /* Windows in Z-order: 0 is bottom, g_z_count-1 is top/focused */
+    int top = (g_z_count > 0) ? g_z_order[g_z_count - 1] : -1;
 
-    for (int i = 0; i < MK_MAX_SURFACES; i++) {
+    for (int z = 0; z < g_z_count; z++) {
+        int i = g_z_order[z];
         if (!g_surf[i].used || !g_surf[i].mapped) continue;
         draw_window(&g_surf[i], i == top);
         g_surf[i].dirty = 0;
@@ -410,7 +438,8 @@ int mk_hit_test(int sx, int sy, int* local_x, int* local_y, int* on_title, int* 
     if (on_title) *on_title = 0;
     if (on_close) *on_close = 0;
 
-    for (int i = MK_MAX_SURFACES - 1; i >= 0; i--) {
+    for (int z = g_z_count - 1; z >= 0; z--) {
+        int i = g_z_order[z];
         struct mk_surface* s = &g_surf[i];
         if (!s->used || !s->mapped) continue;
         int x0 = s->x, y0 = s->y;

@@ -24,6 +24,17 @@ static size_t align_up(size_t n) {
     return (n + (ALIGN - 1)) & ~(ALIGN - 1);
 }
 
+static inline uint32_t kmalloc_lock(void) {
+    uint32_t flags;
+    __asm__ volatile ("pushf; pop %0; cli" : "=r"(flags));
+    return flags;
+}
+
+static inline void kmalloc_unlock(uint32_t flags) {
+    if (flags & 0x200)
+        __asm__ volatile ("sti");
+}
+
 void kmalloc_init(void) {
     head = (struct block*)KHEAP_START;
     head->size = KHEAP_SIZE - sizeof(struct block);
@@ -63,31 +74,38 @@ void* kmalloc(size_t size) {
         return 0;
     size = align_up(size);
 
+    uint32_t flags = kmalloc_lock();
     struct block* b = head;
     while (b) {
         if (b->free && b->size >= size) {
             split_block(b, size);
             b->free = 0;
             heap_used += b->size;
+            kmalloc_unlock(flags);
             return (void*)(b + 1);
         }
         b = b->next;
     }
+    kmalloc_unlock(flags);
     return 0; /* out of memory */
 }
 
 void kfree(void* ptr) {
     if (!ptr)
         return;
+    uint32_t flags = kmalloc_lock();
     struct block* b = ((struct block*)ptr) - 1;
-    if (b->free)
+    if (b->free) {
+        kmalloc_unlock(flags);
         return;
+    }
     if (heap_used >= b->size)
         heap_used -= b->size;
     else
         heap_used = 0;
     b->free = 1;
     coalesce();
+    kmalloc_unlock(flags);
 }
 
 void* krealloc(void* ptr, size_t size) {

@@ -30,6 +30,7 @@ enum fs_result fs_rm(const char* name);
 enum fs_result fs_rm_rf(const char* name); /* recursive, like rm -r */
 enum fs_result fs_write(const char* name, const char* text);
 enum fs_result fs_write_bin(const char* name, const void* data, size_t len);
+enum fs_result fs_write_at(const char* name, size_t pos, const void* data, size_t len);
 enum fs_result fs_append(const char* name, const char* text);
 enum fs_result fs_read(const char* name, const char** out_content, size_t* out_len);
 enum fs_result fs_read_path(const char* path, const char** out_content, size_t* out_len);

@@ -72,7 +72,8 @@ static uint8_t  num_fats;
 static uint32_t total_clusters;
 
 static uint8_t sector_buf[SECTOR_SIZE];
-static uint8_t cluster_buf[SECTOR_SIZE * 8];
+/* Buffer for up to 64 sectors/cluster (32 KiB) - avoids buffer overflow on larger clusters */
+static uint8_t cluster_buf[SECTOR_SIZE * 64];
 
 static void mem_set(void* d, uint8_t v, size_t n) {
     uint8_t* p = d;
@@ -748,7 +749,7 @@ enum fat_result fat32_mkfs(uint32_t part_lba, uint32_t size_sectors) {
     }
 
     /* zero root cluster */
-    mem_set(cluster_buf, 0, SECTOR_SIZE * 8);
+    mem_set(cluster_buf, 0, (size_t)spc * SECTOR_SIZE);
     uint32_t data_lba = part_lba + reserved + fats * fat_sz;
     if (ata_write_sectors(data_lba, spc, cluster_buf) != 0) return FAT_ERR_IO;
 

@@ -122,6 +122,7 @@
 #define SYS_SET_THREAD_AREA 243
 #define SYS_GET_THREAD_AREA 244
 #define SYS_EXIT_GROUP      252
+#define SYS_SET_TID_ADDRESS 258
 #define SYS_CLOCK_SETTIME   264
 #define SYS_CLOCK_GETTIME   265
 #define SYS_CLOCK_GETRES    266
@@ -133,6 +134,8 @@
 #define SYS_RENAMEAT        302
 #define SYS_FACCESSAT       307
 #define SYS_PIPE2           331
+#define SYS_RSEQ            334
+#define SYS_PRLIMIT64       340
 #define SYS_GETRANDOM       355
 
 /* mmap flags (Linux) */

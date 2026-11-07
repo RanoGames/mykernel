@@ -304,6 +304,33 @@ out:
     return r;
 }
 
+enum fs_result fs_write_at(const char* name, size_t pos, const void* data, size_t len) {
+    fs_lock();
+    enum fs_result r = FS_OK;
+    if (pos + len >= FS_FILE_MAX) { r = FS_ERR_TOO_BIG; goto out; }
+    int idx = fs_find_child(cwd, name);
+    if (idx == -1) {
+        fs_unlock(); /* touch takes its own lock */
+        r = fs_touch(name);
+        fs_lock();
+        if (r != FS_OK) goto out;
+        idx = fs_find_child(cwd, name);
+    }
+    if (idx == -1) { r = FS_ERR_NOT_FOUND; goto out; }
+    if (nodes[idx].type != FS_TYPE_FILE) { r = FS_ERR_IS_A_DIRECTORY; goto out; }
+    if (pos > nodes[idx].content_len) {
+        k_memset(nodes[idx].content + nodes[idx].content_len, 0, pos - nodes[idx].content_len);
+    }
+    k_memcpy(nodes[idx].content + pos, data, len);
+    if (pos + len > nodes[idx].content_len) {
+        nodes[idx].content_len = pos + len;
+        nodes[idx].content[nodes[idx].content_len] = '\0';
+    }
+out:
+    fs_unlock();
+    return r;
+}
+
 
 enum fs_result fs_append(const char* name, const char* text) {
     fs_lock();

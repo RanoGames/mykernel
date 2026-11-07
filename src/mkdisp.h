@@ -28,6 +28,7 @@ int  mk_is_active(void);
 int  mk_surface_create(int w, int h, const char* title);
 void mk_surface_destroy(int id);
 void mk_surface_move(int id, int x, int y);
+void mk_surface_raise(int id);
 void mk_surface_set_title(int id, const char* title);
 void mk_surface_commit(int id);          /* mark dirty + compose */
 struct mk_surface* mk_surface_get(int id);

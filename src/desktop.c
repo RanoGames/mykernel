@@ -490,8 +490,6 @@ void desktop_run(void) {
                 if (start_open) { start_open = 0; need_redraw = 1; }
                 else goto done;
             }
-            if (k == 'q' || k == 'Q')
-                goto done;
 
             if (surface_alive(id_calc)) {
                 if (k >= '0' && k <= '9') {
@@ -578,17 +576,20 @@ void desktop_run(void) {
                 } else {
                     int lx, ly, on_title, on_close;
                     int id = mk_hit_test(m.x, m.y, &lx, &ly, &on_title, &on_close);
-                    if (id >= 0 && on_close) {
-                        on_close_id(id);
-                        mk_surface_destroy(id);
+                    if (id >= 0) {
+                        mk_surface_raise(id);
                         need_redraw = 1;
-                        dragging = 0;
-                    } else if (id >= 0 && on_title) {
-                        dragging = 1;
-                        drag_id = id;
-                        struct mk_surface* s = mk_surface_get(id);
-                        drag_off_x = m.x - s->x;
-                        drag_off_y = m.y - s->y;
+                        if (on_close) {
+                            on_close_id(id);
+                            mk_surface_destroy(id);
+                            dragging = 0;
+                        } else if (on_title) {
+                            dragging = 1;
+                            drag_id = id;
+                            struct mk_surface* s = mk_surface_get(id);
+                            drag_off_x = m.x - s->x;
+                            drag_off_y = m.y - s->y;
+                        }
                     }
                 }
             }

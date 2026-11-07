@@ -73,7 +73,7 @@ enum elf_result elf_load(const uint8_t* image, size_t size, uint32_t* entry) {
         return ELF_ERR_NOT_32;
     if (eh->e_ident[EI_DATA] != ELFDATA2LSB)
         return ELF_ERR_BAD_MAGIC;
-    if (eh->e_type != ET_EXEC)
+    if (eh->e_type != ET_EXEC && eh->e_type != 3 /* ET_DYN */)
         return ELF_ERR_NOT_EXEC;
     if (eh->e_machine != EM_386)
         return ELF_ERR_BAD_ARCH;

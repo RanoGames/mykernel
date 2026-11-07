@@ -116,10 +116,13 @@ endif
 
 run: $(BUILD_DIR)/mykernel.bin
 	qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin -vga std \
+		-net nic,model=rtl8139 -net user \
 		-audiodev pa,id=spk -machine pcspk-audiodev=spk 2>/dev/null \
 	|| qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin -vga std \
+		-net nic,model=rtl8139 -net user \
 		-audiodev sdl,id=spk -machine pcspk-audiodev=spk 2>/dev/null \
-	|| qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin -vga std
+	|| qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin -vga std \
+		-net nic,model=rtl8139 -net user
 
 run-nographic: $(BUILD_DIR)/mykernel.bin
 	qemu-system-i386 -kernel $(BUILD_DIR)/mykernel.bin -nographic

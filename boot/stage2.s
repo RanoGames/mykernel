@@ -29,9 +29,9 @@ _stage2_start:
     movl 0x0504, %eax
     test %eax, %eax
     jz err_disk
-    cmpl $512, %eax
+    cmpl $768, %eax
     jbe 1f
-    movl $512, %eax
+    movl $768, %eax
 1:  movl %eax, ksects
     movl 0x0508, %eax
     test %eax, %eax
@@ -71,6 +71,16 @@ load_rm:
 do_pm:
     mov $msg_pm, %si
     call puts
+
+    /* Enable A20 line (Fast A20 port 0x92) */
+    inb $0x92, %al
+    testb $2, %al
+    jnz 1f
+    orb $2, %al
+    andb $0xFE, %al
+    outb %al, $0x92
+1:
+
     cli
     lgdt gdt_desc
     mov %cr0, %eax

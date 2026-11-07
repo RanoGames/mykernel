@@ -13,6 +13,7 @@
 #include "timer.h"
 #include "power.h"
 #include "kmalloc.h"
+#include "gdt.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -113,6 +114,19 @@ static int sys_write(int fd, const char* buf, int count) {
     if (fd < 0 || fd >= FD_MAX || !fds[fd].used) return -EBADF;
     if (fds[fd].type == FD_CONSOLE) {
         for (int i = 0; i < count; i++) terminal_putchar(buf[i]);
+        return count;
+    }
+    if (fds[fd].type == FD_RAMFILE) {
+        if (!fds[fd].writable) return -EBADF;
+        enum fs_result r = fs_write_at(fds[fd].name, fds[fd].pos, buf, (size_t)count);
+        if (r != FS_OK) return -ENOSPC;
+        fds[fd].pos += (size_t)count;
+        const char* content = 0;
+        size_t len = 0;
+        if (fs_read(fds[fd].name, &content, &len) == FS_OK) {
+            fds[fd].data = content;
+            fds[fd].len = len;
+        }
         return count;
     }
     return -EBADF;
@@ -479,10 +493,28 @@ struct user_desc {
 
 static int sys_set_thread_area(struct user_desc* u) {
     if (!u) return -EFAULT;
-    if (u->entry_number == (uint32_t)-1)
-        u->entry_number = tls_entry;
+    if (u->entry_number == (uint32_t)-1 || u->entry_number < GDT_TLS_MIN || u->entry_number > GDT_TLS_MAX)
+        u->entry_number = GDT_TLS_MIN;
+    tls_entry = u->entry_number;
     tls_base = u->base_addr;
-    /* Real kernel would load GDT TLS; we record base for future */
+    /* flags bit 4: limit_in_pages (typical for glibc 4KiB page units) */
+    int is_pages = (u->flags & (1 << 4)) ? 1 : 0;
+    gdt_set_tls((int)u->entry_number, u->base_addr, u->limit, is_pages);
+    return 0;
+}
+
+static int sys_prlimit64(int pid, int resource, const void* new_limit, void* old_limit) {
+    (void)pid; (void)new_limit;
+    if (old_limit) {
+        uint64_t* lim = (uint64_t*)old_limit;
+        if (resource == 3) { /* RLIMIT_STACK */
+            lim[0] = 2 * 1024 * 1024; /* 2 MiB */
+            lim[1] = 8 * 1024 * 1024; /* 8 MiB */
+        } else {
+            lim[0] = 0x7FFFFFFF;
+            lim[1] = 0x7FFFFFFF;
+        }
+    }
     return 0;
 }
 
@@ -743,6 +775,15 @@ void syscall_handler(struct registers* regs) {
             break;
         case SYS_GET_THREAD_AREA:
             ret = sys_get_thread_area((struct user_desc*)regs->ebx);
+            break;
+        case SYS_SET_TID_ADDRESS:
+            ret = sched_current() ? sched_current()->id : 1;
+            break;
+        case SYS_RSEQ:
+            ret = -ENOSYS;
+            break;
+        case SYS_PRLIMIT64:
+            ret = sys_prlimit64((int)regs->ebx, (int)regs->ecx, (const void*)regs->edx, (void*)regs->esi);
             break;
         case SYS_FUTEX:
             ret = sys_futex((uint32_t*)regs->ebx, (int)regs->ecx, regs->edx,

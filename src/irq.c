@@ -5,6 +5,7 @@
 #include "io.h"
 #include "vga.h"
 #include "syscall.h"
+#include "process.h"
 
 #define IDT_FLAGS     0x8E /* kernel interrupt gate */
 #define IDT_FLAGS_USER 0xEE /* DPL=3 — int 0x80 из userspace */
@@ -67,7 +68,25 @@ void isr_handler(struct registers* regs) {
         return;
     }
 
-    terminal_writestring("\n[EXCEPTION] ");
+    /* If the exception was triggered from Ring 3 (user space), terminate only the process */
+    if ((regs->cs & 3) == 3) {
+        terminal_writestring("\n[USER EXCEPTION] ");
+        if (regs->int_no < 20)
+            terminal_writestring(exception_messages[regs->int_no]);
+        else
+            terminal_writestring("Unknown");
+        terminal_writestring(" (int ");
+        terminal_write_uint(regs->int_no);
+        terminal_writestring(", err ");
+        terminal_write_uint(regs->err_code);
+        terminal_writestring(", eip ");
+        terminal_write_hex(regs->eip);
+        terminal_writestring(") -- process terminated\n");
+        process_exit_to_kernel(128 + regs->int_no);
+        return;
+    }
+
+    terminal_writestring("\n[KERNEL PANIC] ");
     if (regs->int_no < 20)
         terminal_writestring(exception_messages[regs->int_no]);
     else
