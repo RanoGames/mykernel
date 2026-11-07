@@ -50,6 +50,7 @@
 #define SYS_SETSID           66
 #define SYS_SIGACTION        67
 #define SYS_SETHOSTNAME      74
+#define SYS_GETHOSTNAME      170
 #define SYS_SETRLIMIT        75
 #define SYS_GETRLIMIT        76
 #define SYS_GETRUSAGE        77

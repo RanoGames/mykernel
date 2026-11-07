@@ -82,6 +82,11 @@ static void k_memcpy(void* d, const void* s, size_t n) {
     for (size_t i = 0; i < n; i++) dd[i] = ss[i];
 }
 
+static void k_memset(void* d, int val, size_t n) {
+    uint8_t* dd = (uint8_t*)d;
+    for (size_t i = 0; i < n; i++) dd[i] = (uint8_t)val;
+}
+
 void fs_init(void) {
     fs_lock_depth = 0;
     spin_init(&fs_spinlock);

@@ -2,6 +2,7 @@
 """
 Native Windows / Cross-platform build script for mykernel.
 Builds the kernel, userland blobs, and boots in QEMU without needing WSL or MSYS2.
+All build tools and outputs reside on D: to conserve space on C:.
 """
 
 import os
@@ -16,7 +17,6 @@ USER_DIR = ROOT_DIR / "user"
 BUILD_DIR = ROOT_DIR / "build"
 BOOT_DIR = ROOT_DIR / "boot"
 
-# Candidate toolchain locations on Windows
 TOOLCHAIN_PATHS = [
     Path(r"D:\i686-elf-tools\bin"),
     Path(r"D:\toolchain\bin"),
@@ -29,11 +29,9 @@ QEMU_PATHS = [
 ]
 
 def find_tool(name: str) -> str:
-    # 1. Check PATH
     p = shutil.which(name)
     if p:
         return p
-    # 2. Check candidate directories
     for t_dir in TOOLCHAIN_PATHS:
         candidate = t_dir / f"{name}.exe"
         if candidate.exists():
@@ -52,10 +50,10 @@ def find_qemu() -> str:
             return str(q)
     return "qemu-system-i386"
 
-def run_cmd(cmd, desc=None):
+def run_cmd(cmd, desc=None, cwd=None):
     if desc:
         print(f"[{desc}] {' '.join(str(c) for c in cmd)}")
-    res = subprocess.run(cmd)
+    res = subprocess.run(cmd, cwd=cwd)
     if res.returncode != 0:
         print(f"ERROR: command failed with code {res.returncode}")
         sys.exit(res.returncode)
@@ -69,13 +67,12 @@ def main():
             print("Cleaned build directory.")
         return
 
-    # Check compilers
+    # Check compiler
     gcc = find_tool("i686-elf-gcc")
     as_tool = find_tool("i686-elf-as")
     objcopy = find_tool("i686-elf-objcopy")
     ld_tool = find_tool("i686-elf-ld")
 
-    # If i686-elf-gcc not found, try generic gcc with -m32
     has_cross = shutil.which(gcc) is not None or Path(gcc).exists()
     if not has_cross:
         print(f"Warning: {gcc} not found. Trying fallback to gcc...")
@@ -84,7 +81,7 @@ def main():
         objcopy = find_tool("objcopy")
         ld_tool = find_tool("ld")
 
-    print(f"Using compiler: {gcc}")
+    print(f"Using compiler:  {gcc}")
     print(f"Using assembler: {as_tool}")
     print(f"Using objcopy:   {objcopy}")
 
@@ -92,18 +89,18 @@ def main():
 
     cflags = [
         "-std=gnu99", "-ffreestanding", "-fno-stack-protector",
-        "-fno-pic", "-fno-pie", "-Wall", "-Wextra", "-O2",
-        f"-I{SRC_DIR}"
+        "-fno-pic", "-fno-pie", "-fno-asynchronous-unwind-tables",
+        "-Wall", "-Wextra", "-O2", f"-I{SRC_DIR}"
     ]
     user_cflags = [
         "-std=gnu99", "-ffreestanding", "-fno-stack-protector",
-        "-fno-pic", "-fno-pie", "-Wall", "-Wextra", "-O2",
-        f"-I{USER_DIR / 'include'}"
+        "-fno-pic", "-fno-pie", "-fno-asynchronous-unwind-tables",
+        "-Wall", "-Wextra", "-O2", f"-I{USER_DIR / 'include'}"
     ]
     user_pic_cflags = [
         "-std=gnu99", "-ffreestanding", "-fno-stack-protector",
-        "-fPIC", "-Wall", "-Wextra", "-O2",
-        f"-I{USER_DIR / 'include'}"
+        "-fPIC", "-fno-asynchronous-unwind-tables",
+        "-Wall", "-Wextra", "-O2", f"-I{USER_DIR / 'include'}"
     ]
 
     extra_arch = []
@@ -126,33 +123,31 @@ def main():
 
     # hello.elf & blob
     hello_elf = BUILD_DIR / "hello.elf"
-    hello_blob = BUILD_DIR / "hello_blob.o"
     run_cmd([gcc] + user_cflags + extra_arch + [
         "-T", str(USER_DIR / "linker.ld"), "-nostdlib", "-Wl,--build-id=none",
         "-o", str(hello_elf), str(USER_DIR / "hello.c")
     ] + [str(o) for o in user_lib_objs], "LINK hello.elf")
-    run_cmd([objcopy, "-O", "elf32-i386", "-B", "i386", "-I", "binary", str(hello_elf), str(hello_blob)], "OBJCOPY hello_blob.o")
+    # Must run objcopy with relative path 'build/hello.elf' so symbols match _binary_build_hello_elf_*
+    run_cmd([objcopy, "-O", "elf32-i386", "-B", "i386", "-I", "binary", "build/hello.elf", "build/hello_blob.o"], "OBJCOPY hello_blob.o", cwd=ROOT_DIR)
 
     # libhello.so & blob
     libhello_so = BUILD_DIR / "libhello.so"
-    libhello_blob = BUILD_DIR / "libhello_blob.o"
     run_cmd([gcc] + user_pic_cflags + extra_arch + [
         "-shared", "-nostdlib", "-Wl,--build-id=none",
         "-T", str(USER_DIR / "libhello.ld"), "-Wl,-soname,libhello.so",
         "-o", str(libhello_so), str(USER_DIR / "libhello.c")
     ], "LINK libhello.so")
-    run_cmd([objcopy, "-O", "elf32-i386", "-B", "i386", "-I", "binary", str(libhello_so), str(libhello_blob)], "OBJCOPY libhello_blob.o")
+    run_cmd([objcopy, "-O", "elf32-i386", "-B", "i386", "-I", "binary", "build/libhello.so", "build/libhello_blob.o"], "OBJCOPY libhello_blob.o", cwd=ROOT_DIR)
 
     # dynhello.elf & blob
     dynhello_elf = BUILD_DIR / "dynhello.elf"
-    dynhello_blob = BUILD_DIR / "dynhello_blob.o"
     run_cmd([gcc] + user_pic_cflags + extra_arch + [
         "-nostdlib", "-Wl,--build-id=none",
         "-T", str(USER_DIR / "dynhello.ld"),
         "-Wl,-dynamic-linker,/lib/ld-mykernel.so",
         "-o", str(dynhello_elf), str(USER_DIR / "dynhello.c"), str(libhello_so)
     ], "LINK dynhello.elf")
-    run_cmd([objcopy, "-O", "elf32-i386", "-B", "i386", "-I", "binary", str(dynhello_elf), str(dynhello_blob)], "OBJCOPY dynhello_blob.o")
+    run_cmd([objcopy, "-O", "elf32-i386", "-B", "i386", "-I", "binary", "build/dynhello.elf", "build/dynhello_blob.o"], "OBJCOPY dynhello_blob.o", cwd=ROOT_DIR)
 
     # 2. Assemble Kernel ASM files
     print("\n--- Assembling Kernel Sources ---")
@@ -185,9 +180,11 @@ def main():
     # 4. Link Kernel
     print("\n--- Linking Kernel ---")
     kernel_bin = BUILD_DIR / "mykernel.bin"
-    # Order: boot.o first, other asm, c objs, user blobs
     boot_obj = BUILD_DIR / "boot.o"
     other_asm = [o for o in asm_objs if o != boot_obj]
+    hello_blob = BUILD_DIR / "hello_blob.o"
+    libhello_blob = BUILD_DIR / "libhello_blob.o"
+    dynhello_blob = BUILD_DIR / "dynhello_blob.o"
     all_objs = [boot_obj] + other_asm + c_objs + [hello_blob, libhello_blob, dynhello_blob]
 
     link_cmd = [
@@ -209,7 +206,6 @@ def main():
         run_cmd([as_tool] + as_extra + [str(BOOT_DIR / "mbr.s"), "-o", str(mbr_o)], "AS mbr.s")
         run_cmd([ld_tool, "-m", "elf_i386", "-Ttext", "0x7C00", "-o", str(mbr_elf), str(mbr_o)], "LD mbr.elf")
         run_cmd([objcopy, "-O", "binary", str(mbr_elf), str(mbr_bin)], "OBJCOPY mbr.bin")
-        # Pad to 512 bytes
         mbr_data = mbr_bin.read_bytes()
         mbr_bin.write_bytes(mbr_data[:512].ljust(512, b"\x00"))
 

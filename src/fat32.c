@@ -96,7 +96,7 @@ static int read_sector(uint32_t lba) {
     return ata_read_sectors(partition_lba + lba, 1, sector_buf);
 }
 
-static int write_sector(uint32_t lba) {
+static int __attribute__((unused)) write_sector(uint32_t lba) {
     return ata_write_sectors(partition_lba + lba, 1, sector_buf);
 }
 
