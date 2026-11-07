@@ -32,3 +32,6 @@ Thumbs.db
 .DS_Store
 desktop.ini
 fat.img
+disk.img
+*.log
+*.raw
