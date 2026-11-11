@@ -42,6 +42,7 @@ void mk_surface_commit(int id);          /* mark dirty + compose */
 struct mk_surface* mk_surface_get(int id);
 
 void mk_compose(void);                   /* full redraw: wallpaper, panel, windows, cursor */
+void mk_compose_rect(int rx0, int ry0, int rx1, int ry1); /* bounded / dirty-region compose & burst LFB flip */
 void mk_set_wallpaper_color(uint32_t c);
 void mk_draw_cursor(void);
 /* Move cursor without full compose (saves/restores underlay). */

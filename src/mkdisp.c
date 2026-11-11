@@ -674,6 +674,87 @@ void mk_compose(void) {
     }
 }
 
+void mk_compose_rect(int rx0, int ry0, int rx1, int ry1) {
+    if (!g_active || !g_back_ok) return;
+
+    if (rx0 < 0) rx0 = 0;
+    if (ry0 < 0) ry0 = 0;
+    if (rx1 > g_sw) rx1 = g_sw;
+    if (ry1 > g_sh) ry1 = g_sh;
+    if (rx0 >= rx1 || ry0 >= ry1) return;
+
+    const struct vbe_info* vi = vbe_get_info();
+    if (!vi || !vi->active || !vi->lfb) return;
+
+    /* 1. Restore previous cursor underlay */
+    cursor_restore_under();
+
+    /* 2. Restore wallpaper in dirty rect */
+    for (int y = ry0; y < ry1; y++) {
+        uint32_t c = g_wallpaper;
+        if (y < 100) {
+            uint8_t shade = (uint8_t)(40 + y / 2);
+            c = vbe_rgb(20, (uint8_t)(60 + shade / 3), (uint8_t)(120 + shade / 2));
+        }
+        uint32_t* row = g_back + y * g_sw + rx0;
+        int count = rx1 - rx0;
+        for (int i = 0; i < count; i++) {
+            row[i] = c;
+        }
+    }
+
+    /* 3. Desktop icons (under windows) if dirty rect touches icon areas */
+    if (g_desktop_layer && (rx0 < 220 || rx1 > g_sw - 120))
+        g_desktop_layer();
+
+    /* 4. Windows in Z-order */
+    int top = (g_z_count > 0) ? g_z_order[g_z_count - 1] : -1;
+    for (int z = 0; z < g_z_count; z++) {
+        int i = g_z_order[z];
+        if (!g_surf[i].used || !g_surf[i].mapped) continue;
+        struct mk_surface* s = &g_surf[i];
+        int wx0 = s->x - 1;
+        int wy0 = s->y - 1;
+        int wx1 = s->x + s->w + 1;
+        int wy1 = s->y + s->h + MK_TITLE_H + 1;
+        if (wx0 < rx1 && wx1 > rx0 && wy0 < ry1 && wy1 > ry0) {
+            draw_window(s, i == top);
+            s->dirty = 0;
+        }
+    }
+
+    /* 5. Panel if bottom touched */
+    if (ry1 > g_sh - MK_PANEL_H)
+        draw_panel();
+
+    /* 6. Desktop overlay (e.g. Start menu) if active */
+    if (g_desktop_overlay)
+        g_desktop_overlay();
+
+    /* 7. Burst DMA flip of ONLY dirty rows to LFB */
+    int w_count = rx1 - rx0;
+    for (int y = ry0; y < ry1; y++) {
+        void* dst = (void*)((uint32_t*)vi->lfb + y * vi->width + rx0);
+        const void* src = (const void*)(g_back + y * g_sw + rx0);
+        uint32_t count = (uint32_t)w_count;
+        __asm__ volatile (
+            "cld\n\t"
+            "rep movsl\n\t"
+            : "+D"(dst), "+S"(src), "+c"(count)
+            :
+            : "memory"
+        );
+    }
+
+    /* 8. Cursor only on LFB after flip */
+    {
+        struct mouse_state m;
+        mouse_get(&m);
+        cursor_save_under(m.x, m.y);
+        cursor_paint_at(m.x, m.y);
+    }
+}
+
 int mk_hit_test_ext(int sx, int sy, int* local_x, int* local_y, int* on_title, int* on_close, int* on_min) {
     if (local_x) *local_x = 0;
     if (local_y) *local_y = 0;

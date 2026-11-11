@@ -15,6 +15,12 @@
 #include "shell.h"
 #include "fs.h"
 #include "kmalloc.h"
+#include "part.h"
+#include "install.h"
+
+#ifndef KEY_SUPER
+#define KEY_SUPER ((char)0x15)
+#endif
 
 static int g_desktop_running = 0;
 
@@ -88,6 +94,7 @@ static int id_notes   = -1;
 static int id_help    = -1;
 static int id_trash   = -1;
 static int id_demo    = -1;
+static int id_installer = -1;
 static int active_focus_id = -1;
 
 static int start_open = 0;
@@ -1085,6 +1092,276 @@ static void paint_trash(struct mk_surface* s) {
 
 static void open_trash(void) { OPEN_APP(id_trash, 320, 140, "Recycle Bin", paint_trash); }
 
+/* ---- Desktop OS Installer Wizard App ---- */
+static int inst_step = 0; /* 0: Disk Detect, 1: Partition Scheme, 2: Confirm, 3: Installing, 4: Done */
+static int inst_mode = INSTALL_MODE_HYBRID;
+static struct disk_info inst_di;
+static int inst_probed = 0;
+static int inst_progress = 0;
+static char inst_status_str[64] = "Ready to install.";
+
+static void paint_installer(struct mk_surface* s) {
+    if (!s || !s->pixels) return;
+    mk_buf_fill(s->pixels, s->w, s->h, 0x001B202A);
+
+    if (!inst_probed) {
+        part_detect_disk(&inst_di);
+        inst_probed = 1;
+    }
+
+    /* Wizard Title Header */
+    mk_buf_box(s->pixels, s->w, s->h, 10, 8, s->w - 20, 30, 0x002D3748, 0x00141820);
+    if (inst_step == 0) {
+        mk_buf_text(s->pixels, s->w, s->h, 16, 15, "MyKernel OS Setup Wizard - [Step 1/4: Disk Detection]", 0x0038BDF8, 0x00141820);
+    } else if (inst_step == 1) {
+        mk_buf_text(s->pixels, s->w, s->h, 16, 15, "MyKernel OS Setup Wizard - [Step 2/4: Partition Scheme]", 0x0038BDF8, 0x00141820);
+    } else if (inst_step == 2) {
+        mk_buf_text(s->pixels, s->w, s->h, 16, 15, "MyKernel OS Setup Wizard - [Step 3/4: Ready to Install]", 0x0038BDF8, 0x00141820);
+    } else if (inst_step == 3) {
+        mk_buf_text(s->pixels, s->w, s->h, 16, 15, "MyKernel OS Setup Wizard - [Installing to Storage...]", 0x0038BDF8, 0x00141820);
+    } else if (inst_step == 4) {
+        mk_buf_text(s->pixels, s->w, s->h, 16, 15, "MyKernel OS Setup Wizard - [Installation Complete!]", 0x004ADE80, 0x00141820);
+    }
+
+    if (inst_step == 0) {
+        mk_buf_text(s->pixels, s->w, s->h, 16, 46, "Primary Storage Drive Detection:", 0x00E2E8F0, 0x001B202A);
+        mk_buf_box(s->pixels, s->w, s->h, 16, 68, s->w - 32, 140, 0x002D3748, 0x00141820);
+
+        if (inst_di.present) {
+            mk_buf_text(s->pixels, s->w, s->h, 24, 78, "Drive: ATA Primary Master IDE Controller [Detected]", 0x004ADE80, 0x00141820);
+
+            char cap_str[64];
+            char mb_buf[12], sec_buf[12];
+            u32_to_str(inst_di.size_mb, mb_buf);
+            u32_to_str(inst_di.total_sectors, sec_buf);
+            int ci = 0;
+            const char* cp = "Capacity: ";
+            while (*cp) cap_str[ci++] = *cp++;
+            for (int j = 0; mb_buf[j]; j++) cap_str[ci++] = mb_buf[j];
+            const char* mp = " MB  (";
+            while (*mp) cap_str[ci++] = *mp++;
+            for (int j = 0; sec_buf[j]; j++) cap_str[ci++] = sec_buf[j];
+            const char* sp = " Sectors, 512 B/sector)";
+            while (*sp) cap_str[ci++] = *sp++;
+            cap_str[ci] = '\0';
+            mk_buf_text(s->pixels, s->w, s->h, 24, 102, cap_str, 0x00CBD5E1, 0x00141820);
+
+            const char* lay = inst_di.is_hybrid ? "Partition Layout: Existing Hybrid MBR + GPT" :
+                              (inst_di.has_gpt ? "Partition Layout: Existing GPT Layout" :
+                              (inst_di.has_mbr ? "Partition Layout: Existing BIOS MBR" :
+                                                 "Partition Layout: Unformatted / Raw Drive"));
+            uint32_t lay_col = inst_di.is_hybrid ? 0x0038BDF8 : 0x0094A3B8;
+            mk_buf_text(s->pixels, s->w, s->h, 24, 126, lay, lay_col, 0x00141820);
+
+            char geo_str[64];
+            char c_buf[10], h_buf[10], s_buf[10];
+            u32_to_str(inst_di.cylinders, c_buf);
+            u32_to_str(inst_di.heads, h_buf);
+            u32_to_str(inst_di.sectors_per_track, s_buf);
+            int gi = 0;
+            const char* gp = "Geometry: C/H/S: ";
+            while (*gp) geo_str[gi++] = *gp++;
+            for (int j = 0; c_buf[j]; j++) geo_str[gi++] = c_buf[j];
+            geo_str[gi++] = '/';
+            for (int j = 0; h_buf[j]; j++) geo_str[gi++] = h_buf[j];
+            geo_str[gi++] = '/';
+            for (int j = 0; s_buf[j]; j++) geo_str[gi++] = s_buf[j];
+            const char* lp = " | LBA PIO Mode";
+            while (*lp) geo_str[gi++] = *lp++;
+            geo_str[gi] = '\0';
+            mk_buf_text(s->pixels, s->w, s->h, 24, 150, geo_str, 0x0094A3B8, 0x00141820);
+            mk_buf_text(s->pixels, s->w, s->h, 24, 174, "Status: Storage drive ready for OS installation.", 0x00FACC15, 0x00141820);
+        } else {
+            mk_buf_text(s->pixels, s->w, s->h, 24, 78, "Drive: No ATA drive detected on Primary Controller!", 0x00F87171, 0x00141820);
+            mk_buf_text(s->pixels, s->w, s->h, 24, 102, "Ensure QEMU/Bochs was started with a virtual hard disk", 0x00CBD5E1, 0x00141820);
+            mk_buf_text(s->pixels, s->w, s->h, 24, 126, "e.g.: qemu-system-i386 -hda disk.img", 0x00FACC15, 0x00141820);
+            mk_buf_text(s->pixels, s->w, s->h, 24, 150, "Click 'Re-scan Disk' once drive is connected.", 0x0094A3B8, 0x00141820);
+        }
+
+        mk_buf_btn(s->pixels, s->w, s->h, 16, 224, 116, 28, "Re-scan Disk", 0x0028303F, 0x00FFFFFF, 0);
+        mk_buf_btn(s->pixels, s->w, s->h, 224, 224, 200, 28, "Next: Partition Scheme ->",
+                   inst_di.present ? 0x000E4A7A : 0x001E293B,
+                   inst_di.present ? 0x0038BDF8 : 0x0064748B, inst_di.present);
+    } else if (inst_step == 1) {
+        mk_buf_text(s->pixels, s->w, s->h, 16, 46, "Select Partitioning & Boot Scheme:", 0x00E2E8F0, 0x001B202A);
+
+        int m_hyb = (inst_mode == INSTALL_MODE_HYBRID);
+        int m_mbr = (inst_mode == INSTALL_MODE_MBR);
+        int m_gpt = (inst_mode == INSTALL_MODE_GPT);
+
+        mk_buf_btn(s->pixels, s->w, s->h, 16, 72, s->w - 32, 38,
+                   m_hyb ? "[*] Hybrid MBR + GPT (Recommended: boots BIOS & recognized by GPT)" :
+                           "[ ] Hybrid MBR + GPT (Recommended: boots BIOS & recognized by GPT)",
+                   m_hyb ? 0x000E4A7A : 0x0028303F, m_hyb ? 0x0038BDF8 : 0x00FFFFFF, m_hyb);
+
+        mk_buf_btn(s->pixels, s->w, s->h, 16, 118, s->w - 32, 38,
+                   m_mbr ? "[*] Traditional BIOS MBR (Legacy compatibility, LBA 2048 start)" :
+                           "[ ] Traditional BIOS MBR (Legacy compatibility, LBA 2048 start)",
+                   m_mbr ? 0x000E4A7A : 0x0028303F, m_mbr ? 0x0038BDF8 : 0x00FFFFFF, m_mbr);
+
+        mk_buf_btn(s->pixels, s->w, s->h, 16, 164, s->w - 32, 38,
+                   m_gpt ? "[*] Pure UEFI GPT with Protective MBR (Modern GUID Partition Table)" :
+                           "[ ] Pure UEFI GPT with Protective MBR (Modern GUID Partition Table)",
+                   m_gpt ? 0x000E4A7A : 0x0028303F, m_gpt ? 0x0038BDF8 : 0x00FFFFFF, m_gpt);
+
+        mk_buf_btn(s->pixels, s->w, s->h, 16, 224, 100, 28, "<- Back", 0x0028303F, 0x00FFFFFF, 0);
+        mk_buf_btn(s->pixels, s->w, s->h, 214, 224, 210, 28, "Next: Confirm Installation ->", 0x000E4A7A, 0x0038BDF8, 1);
+    } else if (inst_step == 2) {
+        mk_buf_text(s->pixels, s->w, s->h, 16, 46, "Review Target Drive & Deployment Manifest:", 0x00E2E8F0, 0x001B202A);
+        mk_buf_box(s->pixels, s->w, s->h, 16, 68, s->w - 32, 116, 0x002D3748, 0x00141820);
+
+        char sum1[64] = "Target Disk: Primary ATA Drive (";
+        char mb_buf[12];
+        u32_to_str(inst_di.size_mb, mb_buf);
+        int ci = 0;
+        while (sum1[ci]) ci++;
+        for (int j = 0; mb_buf[j]; j++) sum1[ci++] = mb_buf[j];
+        const char* s1e = " MB)";
+        while (*s1e) sum1[ci++] = *s1e++;
+        sum1[ci] = '\0';
+        mk_buf_text(s->pixels, s->w, s->h, 24, 76, sum1, 0x00CBD5E1, 0x00141820);
+
+        const char* smode = (inst_mode == INSTALL_MODE_HYBRID) ? "Layout: Hybrid MBR + GPT  |  FS: FAT32 (4KB clusters)" :
+                            ((inst_mode == INSTALL_MODE_MBR) ? "Layout: Traditional BIOS MBR |  FS: FAT32 (4KB clusters)" :
+                                                               "Layout: Pure UEFI GPT        |  FS: FAT32 (4KB clusters)");
+        mk_buf_text(s->pixels, s->w, s->h, 24, 98, smode, 0x0038BDF8, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 24, 120, "Bootloader: MBR Bootstrap (LBA 0) & Stage2 (LBA 1)", 0x0094A3B8, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 24, 142, "Payload: /BOOT/KERNEL.BIN (1MB PM), /BIN/HELLO.ELF, /LIB", 0x0094A3B8, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 24, 164, "Notice: Selected drive will be partitioned and formatted.", 0x00F87171, 0x00141820);
+
+        mk_buf_btn(s->pixels, s->w, s->h, 16, 224, 100, 28, "<- Back", 0x0028303F, 0x00FFFFFF, 0);
+        mk_buf_btn(s->pixels, s->w, s->h, 214, 224, 210, 28, "[*] Start Installation", 0x00105C2B, 0x004ADE80, 1);
+    } else if (inst_step == 3) {
+        mk_buf_text(s->pixels, s->w, s->h, 16, 46, "Installing MyKernel OS to Storage...", 0x00E2E8F0, 0x001B202A);
+
+        /* Progress Bar */
+        mk_buf_box(s->pixels, s->w, s->h, 20, 78, s->w - 40, 28, 0x00475569, 0x000F172A);
+        int bar_max_w = s->w - 44;
+        int bar_fill_w = (bar_max_w * inst_progress) / 6;
+        if (bar_fill_w > bar_max_w) bar_fill_w = bar_max_w;
+        if (bar_fill_w > 0) {
+            mk_buf_rect(s->pixels, s->w, s->h, 22, 80, bar_fill_w, 24, 0x0010B981);
+        }
+
+        /* Progress steps manifest */
+        mk_buf_box(s->pixels, s->w, s->h, 20, 116, s->w - 40, 94, 0x002D3748, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 28, 122, "[1/6] Disk Detection & Hardware Handshake", (inst_progress >= 1) ? 0x004ADE80 : 0x0064748B, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 28, 138, "[2/6] Partitioning: Writing Tables (MBR / GPT)", (inst_progress >= 2) ? 0x004ADE80 : 0x0064748B, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 28, 154, "[3/6] Bootloader: Deploying MBR & Stage2", (inst_progress >= 3) ? 0x004ADE80 : 0x0064748B, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 28, 170, "[4/6] Formatting: Initializing FAT32 Volume", (inst_progress >= 4) ? 0x004ADE80 : 0x0064748B, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 28, 186, "[5/6] Deployment: Writing Kernel & Userland ELFs", (inst_progress >= 5) ? 0x004ADE80 : 0x0064748B, 0x00141820);
+
+        mk_buf_text(s->pixels, s->w, s->h, 24, 230, inst_status_str, 0x00FACC15, 0x001B202A);
+    } else if (inst_step == 4) {
+        mk_buf_text(s->pixels, s->w, s->h, 16, 46, "Installation Complete!", 0x004ADE80, 0x001B202A);
+
+        mk_buf_box(s->pixels, s->w, s->h, 16, 68, s->w - 32, 134, 0x0014532D, 0x000F291E);
+        mk_buf_text(s->pixels, s->w, s->h, 24, 76, "[SUCCESS] MyKernel OS installed to Primary Drive.", 0x004ADE80, 0x000F291E);
+        mk_buf_text(s->pixels, s->w, s->h, 24, 98, "- MBR & Stage2 bootloader active at LBA 0 & 1.", 0x00CBD5E1, 0x000F291E);
+        mk_buf_text(s->pixels, s->w, s->h, 24, 120, "- FAT32 system partition mounted at /mnt.", 0x00CBD5E1, 0x000F291E);
+        mk_buf_text(s->pixels, s->w, s->h, 24, 142, "- Kernel binary deployed at LBA 8192 & /BOOT.", 0x00CBD5E1, 0x000F291E);
+        mk_buf_text(s->pixels, s->w, s->h, 24, 164, "- Userland ELF binaries installed in /BIN & /LIB.", 0x00CBD5E1, 0x000F291E);
+        mk_buf_text(s->pixels, s->w, s->h, 24, 186, "You can now reboot directly into the installed system.", 0x00FACC15, 0x000F291E);
+
+        mk_buf_btn(s->pixels, s->w, s->h, 16, 224, 110, 28, "Close", 0x0028303F, 0x00FFFFFF, 0);
+        mk_buf_btn(s->pixels, s->w, s->h, 214, 224, 210, 28, "[*] Reboot System Now", 0x000E4A7A, 0x0038BDF8, 1);
+    }
+}
+
+static void on_installer_progress(int step_num, int total_steps, const char* status_text) {
+    (void)total_steps;
+    inst_progress = step_num;
+    if (status_text) {
+        int i = 0;
+        while (status_text[i] && i < 60) {
+            inst_status_str[i] = status_text[i];
+            i++;
+        }
+        inst_status_str[i] = '\0';
+    }
+    if (surface_alive(id_installer)) {
+        paint_installer(mk_surface_get(id_installer));
+        mk_surface_commit(id_installer);
+        mk_compose();
+    }
+}
+
+static void installer_on_click(int lx, int ly) {
+    if (inst_step == 0) {
+        /* Re-scan Disk */
+        if (lx >= 16 && lx < 132 && ly >= 224 && ly < 252) {
+            part_detect_disk(&inst_di);
+        }
+        /* Next */
+        else if (lx >= 224 && lx < 424 && ly >= 224 && ly < 252) {
+            if (inst_di.present) {
+                inst_step = 1;
+            }
+        }
+    } else if (inst_step == 1) {
+        if (lx >= 16 && lx < 424 && ly >= 72 && ly < 110) {
+            inst_mode = INSTALL_MODE_HYBRID;
+        } else if (lx >= 16 && lx < 424 && ly >= 118 && ly < 156) {
+            inst_mode = INSTALL_MODE_MBR;
+        } else if (lx >= 16 && lx < 424 && ly >= 164 && ly < 202) {
+            inst_mode = INSTALL_MODE_GPT;
+        } else if (lx >= 16 && lx < 116 && ly >= 224 && ly < 252) {
+            inst_step = 0;
+        } else if (lx >= 214 && lx < 424 && ly >= 224 && ly < 252) {
+            inst_step = 2;
+        }
+    } else if (inst_step == 2) {
+        if (lx >= 16 && lx < 116 && ly >= 224 && ly < 252) {
+            inst_step = 1;
+        } else if (lx >= 214 && lx < 424 && ly >= 224 && ly < 252) {
+            inst_step = 3;
+            inst_progress = 1;
+            install_set_progress_callback(on_installer_progress);
+            paint_installer(mk_surface_get(id_installer));
+            mk_surface_commit(id_installer);
+            mk_compose();
+
+            int res = install_run_mode(inst_mode);
+            install_set_progress_callback(0);
+            if (res == 0) {
+                inst_step = 4;
+                inst_progress = 6;
+            } else {
+                inst_step = 3;
+                inst_progress = 0;
+                const char* err = "Installation failed! Check drive.";
+                int ci = 0;
+                while (err[ci] && ci < 40) { inst_status_str[ci] = err[ci]; ci++; }
+                inst_status_str[ci] = '\0';
+            }
+            if (surface_alive(id_installer)) {
+                paint_installer(mk_surface_get(id_installer));
+                mk_surface_commit(id_installer);
+                mk_compose();
+            }
+        }
+    } else if (inst_step == 4) {
+        if (lx >= 16 && lx < 126 && ly >= 224 && ly < 252) {
+            mk_surface_destroy(id_installer);
+            id_installer = -1;
+        } else if (lx >= 214 && lx < 424 && ly >= 224 && ly < 252) {
+            mk_shutdown();
+            gfx_restore_text();
+            machine_reboot();
+        }
+    }
+}
+
+static void open_installer(void) {
+    if (surface_alive(id_installer)) {
+        mk_surface_restore(id_installer);
+        active_focus_id = id_installer;
+        return;
+    }
+    inst_probed = 0;
+    OPEN_APP(id_installer, 440, 268, "Install OS Wizard", paint_installer);
+}
+
 static void on_close_id(int id) {
     if (id == id_welcome) id_welcome = -1;
     if (id == id_clock)   id_clock = -1;
@@ -1098,6 +1375,7 @@ static void on_close_id(int id) {
     if (id == id_help)    id_help = -1;
     if (id == id_trash)   id_trash = -1;
     if (id == id_demo)    id_demo = -1;
+    if (id == id_installer) id_installer = -1;
     if (id == active_focus_id) active_focus_id = -1;
 }
 
@@ -1127,6 +1405,7 @@ static struct desk_icon icons[] = {
     { 1, 2, 0, "Help",     open_help },
     { 1, 3, 0, "About",    open_about },
     { 1, 4, 0, "Demo",     open_demo },
+    { 2, 0, 0, "Install OS", open_installer },
     { -1, -1, 1, "Recycle", open_trash },
 };
 #define N_ICONS ((int)(sizeof(icons) / sizeof(icons[0])))
@@ -1344,6 +1623,33 @@ static void draw_art_trash(int x, int y) {
     mk_bb_fill(x + 15, y + 17, 6, 4, 0x0064748B);
 }
 
+static void draw_art_installer(int x, int y) {
+    /* Hard disk casing */
+    mk_bb_fill(x + 2, y + 2, 32, 32, 0x001E293B);
+    mk_bb_fill(x + 4, y + 4, 28, 28, 0x00334155);
+
+    /* Silver optical disc */
+    mk_bb_fill(x + 8, y + 6, 20, 20, 0x00CBD5E1);
+    mk_bb_fill(x + 6, y + 8, 24, 16, 0x00CBD5E1);
+    mk_bb_fill(x + 9, y + 7, 18, 18, 0x00F1F5F9);
+
+    /* Iridescent rainbow reflections */
+    mk_bb_fill(x + 10, y + 9, 5, 5, 0x0038BDF8);  /* Cyan sheen */
+    mk_bb_fill(x + 19, y + 17, 5, 5, 0x00F43F5E); /* Rose sheen */
+    mk_bb_fill(x + 18, y + 9, 5, 5, 0x00A855F7);  /* Violet sheen */
+
+    /* Spindle center hole */
+    mk_bb_fill(x + 16, y + 14, 4, 4, 0x0064748B);
+    mk_bb_fill(x + 17, y + 15, 2, 2, 0x000F172A);
+
+    /* Bright emerald install arrow */
+    mk_bb_fill(x + 20, y + 20, 12, 12, 0x000F172A);
+    mk_bb_fill(x + 24, y + 20, 4, 6, 0x0010B981);
+    mk_bb_fill(x + 22, y + 26, 8, 2, 0x0010B981);
+    mk_bb_fill(x + 23, y + 28, 6, 2, 0x0010B981);
+    mk_bb_fill(x + 25, y + 30, 2, 2, 0x0010B981);
+}
+
 static void draw_icon(int idx, int x, int y, const char* label) {
     /* Icon Tile Backing / Shadow */
     mk_bb_fill(x + 12, y + 2, 38, 36, 0x00151E28);
@@ -1354,19 +1660,20 @@ static void draw_icon(int idx, int x, int y, const char* label) {
     int ax = x + 11;
     int ay = y + 1;
     switch (idx) {
-        case 0:  draw_art_terminal(ax, ay); break;
-        case 1:  draw_art_tasks(ax, ay);    break;
-        case 2:  draw_art_display(ax, ay);  break;
-        case 3:  draw_art_calc(ax, ay);     break;
-        case 4:  draw_art_notes(ax, ay);    break;
-        case 5:  draw_art_welcome(ax, ay);  break;
-        case 6:  draw_art_clock(ax, ay);    break;
-        case 7:  draw_art_sysinfo(ax, ay);  break;
-        case 8:  draw_art_help(ax, ay);     break;
-        case 9:  draw_art_about(ax, ay);    break;
-        case 10: draw_art_demo(ax, ay);     break;
-        case 11: draw_art_trash(ax, ay);    break;
-        default: draw_art_welcome(ax, ay);  break;
+        case 0:  draw_art_terminal(ax, ay);  break;
+        case 1:  draw_art_tasks(ax, ay);     break;
+        case 2:  draw_art_display(ax, ay);   break;
+        case 3:  draw_art_calc(ax, ay);      break;
+        case 4:  draw_art_notes(ax, ay);     break;
+        case 5:  draw_art_welcome(ax, ay);   break;
+        case 6:  draw_art_clock(ax, ay);     break;
+        case 7:  draw_art_sysinfo(ax, ay);   break;
+        case 8:  draw_art_help(ax, ay);      break;
+        case 9:  draw_art_about(ax, ay);     break;
+        case 10: draw_art_demo(ax, ay);      break;
+        case 11: draw_art_installer(ax, ay); break;
+        case 12: draw_art_trash(ax, ay);     break;
+        default: draw_art_welcome(ax, ay);   break;
     }
 
     /* Centered Clean Text Plate */
@@ -1398,11 +1705,11 @@ static int icon_at(int mx, int my) {
 #define SM_X 4
 #define SM_W 210
 #define SM_ITEM_H 22
-#define SM_NUM_APPS 11
+#define SM_NUM_APPS 12
 
 static const char* sm_items[SM_NUM_APPS] = {
     "Terminal", "Tasks", "Display", "Calculator", "Clock",
-    "SysInfo", "Notes", "Help", "Welcome", "About", "Demo"
+    "SysInfo", "Notes", "Help", "Welcome", "About", "Demo", "Install OS"
 };
 
 static int start_menu_h(void) {
@@ -1437,9 +1744,9 @@ static void draw_start_menu(void) {
         static const uint32_t sm_cols[] = {
             0x0000FF66, 0x000078D7, 0x0000B7C3, 0x00FFB900,
             0x00E81123, 0x008812CD, 0x00F7630C, 0x00107C10,
-            0x00E3008C, 0x004F46E5, 0x007C3AED
+            0x00E3008C, 0x004F46E5, 0x007C3AED, 0x0010B981
         };
-        mk_bb_fill(x + 6, iy + 6, 10, 10, sm_cols[i % 11]);
+        mk_bb_fill(x + 6, iy + 6, 10, 10, sm_cols[i % 12]);
         mk_bb_text(x + 24, iy + 4, sm_items[i], 0x00F0F0F0, bg);
         iy += SM_ITEM_H;
     }
@@ -1516,7 +1823,7 @@ void desktop_run(void) {
     mk_panel_set_start_active(0);
     calc_clear();
     id_welcome = id_clock = id_sysinfo = id_calc = id_term = -1;
-    id_about = id_tasks = id_display = id_notes = id_help = id_trash = id_demo = -1;
+    id_about = id_tasks = id_display = id_notes = id_help = id_trash = id_demo = id_installer = -1;
     active_focus_id = -1;
 
     mk_set_desktop_layer(desktop_layer_paint);
@@ -1541,11 +1848,18 @@ void desktop_run(void) {
     for (;;) {
         char k;
         while (keyboard_trygetchar(&k)) {
+            if (k == KEY_SUPER) {
+                start_open = !start_open;
+                mk_panel_set_start_active(start_open);
+                need_redraw = 1;
+                continue;
+            }
             if (k == 0x1B) { /* ESC */
                 if (start_open) {
                     start_open = 0;
                     mk_panel_set_start_active(0);
                     need_redraw = 1;
+                    continue;
                 } else {
                     goto done;
                 }
@@ -1632,6 +1946,11 @@ void desktop_run(void) {
             }
         }
 
+        /* Mouse event coalescing: drain pending mouse events before composing */
+        struct mouse_event mev;
+        while (mouse_poll_event(&mev)) {
+            /* Coalesce: drain queue so m receives final coordinates */
+        }
         struct mouse_state m;
         mouse_get(&m);
         int buttons = m.buttons;
@@ -1682,7 +2001,7 @@ void desktop_run(void) {
                 if (sm >= 0 && sm < SM_NUM_APPS) {
                     void (*app_launchers[SM_NUM_APPS])(void) = {
                         open_term, open_tasks, open_display, open_calc, open_clock,
-                        open_sysinfo, open_notes, open_help, open_welcome, open_about, open_demo
+                        open_sysinfo, open_notes, open_help, open_welcome, open_about, open_demo, open_installer
                     };
                     app_launchers[sm]();
                     start_open = 0;
@@ -1758,6 +2077,12 @@ void desktop_run(void) {
                                 paint_term(ts);
                                 mk_surface_commit(id_term);
                             }
+                        } else if (id == id_installer) {
+                            installer_on_click(lx, ly);
+                            if (surface_alive(id_installer)) {
+                                paint_installer(mk_surface_get(id_installer));
+                                mk_surface_commit(id_installer);
+                            }
                         }
                     }
                 } else {
@@ -1771,16 +2096,40 @@ void desktop_run(void) {
             }
         }
 
-        if (left_up)
+        if (left_up) {
             dragging = 0;
+            need_redraw = 1;
+        }
 
         if (dragging && drag_id >= 0 && (buttons & 1)) {
             int new_x = m.x - drag_off_x;
             int new_y = m.y - drag_off_y;
             struct mk_surface* ds = mk_surface_get(drag_id);
             if (ds && (ds->x != new_x || ds->y != new_y)) {
+                int old_x = ds->x;
+                int old_y = ds->y;
+                int fw = ds->w;
+                int fh = ds->h + MK_TITLE_H;
+
                 mk_surface_move(drag_id, new_x, new_y);
-                need_redraw = 1;
+
+                /* Compute bounding box of (old_window_rect UNION new_window_rect) */
+                int rx0 = (old_x < ds->x) ? old_x : ds->x;
+                int ry0 = (old_y < ds->y) ? old_y : ds->y;
+                int rx1 = ((old_x + fw) > (ds->x + fw)) ? (old_x + fw) : (ds->x + fw);
+                int ry1 = ((old_y + fh) > (ds->y + fh)) ? (old_y + fh) : (ds->y + fh);
+
+                rx0 -= 4; ry0 -= 4;
+                rx1 += 4; ry1 += 4;
+
+                if (m.x - 2 < rx0) rx0 = m.x - 2;
+                if (m.y - 2 < ry0) ry0 = m.y - 2;
+                if (m.x + MK_CURSOR_W + 2 > rx1) rx1 = m.x + MK_CURSOR_W + 2;
+                if (m.y + MK_CURSOR_H + 2 > ry1) ry1 = m.y + MK_CURSOR_H + 2;
+
+                /* Bounded dirty-region compose and fast burst flip (25x faster in 1080p!) */
+                mk_compose_rect(rx0, ry0, rx1, ry1);
+                need_redraw = 0;
             }
         }
 
