@@ -367,6 +367,23 @@ static void cmd_ping(const char* arg) {
     }
     net_ping(host, 4);
 }
+
+static void cmd_ifconfig(void) {
+    net_dump_stats();
+}
+
+static void cmd_dns(const char* arg) {
+    while (arg[0] == ' ') arg++;
+    char host[64];
+    int i = 0;
+    while (arg[0] && arg[0] != ' ' && i < 63) host[i++] = *arg++;
+    host[i] = 0;
+    if (!host[0]) {
+        terminal_writestring("Usage: dns <hostname>   e.g. dns google.com\n");
+        return;
+    }
+    net_dns(host);
+}
 static void cmd_help(void) {
     terminal_writestring("System: help clear echo about uname whoami free history\n");
     terminal_writestring("        reboot shutdown calc <expr>\n");
@@ -374,7 +391,7 @@ static void cmd_help(void) {
     terminal_writestring("        rm <name> | rm -r <dir>   recursive delete\n");
     terminal_writestring("VFS:    mount [fat|ram] <path> | umount <path> | mount\n");
     terminal_writestring("FAT32:  fatmount fatinfo fatls fatcat fatwrite fatmkdir fatrm\n");
-    terminal_writestring("Net:    ping <host>   (loopback 127.0.0.1)\n");
+    terminal_writestring("Net:    ping <host> | ifconfig | dns <domain>\n");
     terminal_writestring("Disk:   fdisk gpt mkfs install  |  boot: make disk.img\n");
     terminal_writestring("Lang:   lang | lang <file>\n");
     terminal_writestring("Tasks:  ps spawn\n");
@@ -788,6 +805,10 @@ void shell_execute_command(const char* line) {
     else if (str_starts_with(line, "fatrm ")) cmd_fatrm(line + 6);
     else if (str_starts_with(line, "ping ")) cmd_ping(line + 5);
     else if (str_equals(line, "ping")) cmd_ping("");
+    else if (str_equals(line, "ifconfig") || str_equals(line, "netstat")) cmd_ifconfig();
+    else if (str_starts_with(line, "dns ")) cmd_dns(line + 4);
+    else if (str_equals(line, "dns")) cmd_dns("");
+    else if (str_starts_with(line, "nslookup ")) cmd_dns(line + 9);
     else if (str_equals(line, "desktop")) cmd_desktop();
     else {
         terminal_writestring("Unknown command: ");
