@@ -32,7 +32,8 @@ void timer_init(uint32_t hz) {
     if (hz == 0) hz = 100;
     if (hz > 1000) hz = 1000;
 
-    uint32_t divisor = PIT_BASE_HZ / hz;
+    /* 144 Hz requires exact divisor 8286 (1193180 / 144) */
+    uint32_t divisor = (hz == 144) ? 8286 : (PIT_BASE_HZ / hz);
     if (divisor < 1) divisor = 1;
     if (divisor > 65535) divisor = 65535;
 

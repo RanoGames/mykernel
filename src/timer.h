@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#define TIMER_HZ_144 144
+
 void timer_init(uint32_t hz);
 void timer_sleep_ms(uint32_t ms);
 void timer_busy_ms(uint32_t ms);

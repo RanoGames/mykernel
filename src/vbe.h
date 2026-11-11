@@ -8,6 +8,7 @@
 #define VBE_MODE_640x480   0
 #define VBE_MODE_800x600   1
 #define VBE_MODE_1024x768  2
+#define VBE_MODE_1920x1080 3
 
 struct vbe_info {
     uint32_t lfb;

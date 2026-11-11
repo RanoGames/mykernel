@@ -232,12 +232,12 @@ def main():
             disk_img = ROOT_DIR / "disk.img"
             qemu_cmd = [
                 qemu, "-hda", str(disk_img), "-m", "128",
-                "-vga", "std", "-net", "nic,model=rtl8139", "-net", "user"
+                "-vga", "std", "-global", "VGA.vgamem_mb=32", "-net", "nic,model=rtl8139", "-net", "user"
             ]
         else:
             qemu_cmd = [
                 qemu, "-kernel", str(kernel_bin), "-m", "128",
-                "-vga", "std", "-net", "nic,model=rtl8139", "-net", "user",
+                "-vga", "std", "-global", "VGA.vgamem_mb=32", "-net", "nic,model=rtl8139", "-net", "user",
                 "-audiodev", "dsound,id=spk", "-machine", "pcspk-audiodev=spk"
             ]
         print(f"Command: {' '.join(qemu_cmd)}")

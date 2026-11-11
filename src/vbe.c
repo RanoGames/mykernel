@@ -92,10 +92,11 @@ int vbe_probe(void) {
 int vbe_set_mode(int mode_id) {
     uint32_t w, h;
     switch (mode_id) {
-        case VBE_MODE_640x480:  w = 640;  h = 480;  break;
-        case VBE_MODE_800x600:  w = 800;  h = 600;  break;
-        case VBE_MODE_1024x768: w = 1024; h = 768;  break;
-        default:                w = 800;  h = 600;  break;
+        case VBE_MODE_640x480:   w = 640;  h = 480;  break;
+        case VBE_MODE_800x600:   w = 800;  h = 600;  break;
+        case VBE_MODE_1024x768:  w = 1024; h = 768;  break;
+        case VBE_MODE_1920x1080: w = 1920; h = 1080; break;
+        default:                 w = 800;  h = 600;  break;
     }
 
     if (!g_probed && !vbe_probe())
