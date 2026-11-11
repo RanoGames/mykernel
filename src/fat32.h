@@ -27,6 +27,7 @@ void fat32_info(void);
 enum fat_result fat32_ls(const char* path);
 enum fat_result fat32_cat(const char* path);
 enum fat_result fat32_write(const char* name, const char* text);
+enum fat_result fat32_write_file(const char* name, const void* data, size_t len);
 enum fat_result fat32_read_file(const char* name, char* buf, size_t buf_size, size_t* out_len);
 enum fat_result fat32_mkdir(const char* name);
 enum fat_result fat32_unlink(const char* name);

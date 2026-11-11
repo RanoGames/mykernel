@@ -50,15 +50,15 @@ static void fs_unlock(void) {
     }
 }
 
-/* Use for short critical sections in mutators */
-
 static size_t k_strlen(const char* s) {
+    if (!s) return 0;
     size_t n = 0;
     while (s[n]) n++;
     return n;
 }
 
 static int k_streq(const char* a, const char* b) {
+    if (!a || !b) return (a == b);
     size_t i = 0;
     while (a[i] && b[i]) {
         if (a[i] != b[i]) return 0;
@@ -68,6 +68,8 @@ static int k_streq(const char* a, const char* b) {
 }
 
 static void k_strcpy_truncate(char* dst, const char* src, size_t dst_size) {
+    if (!dst || dst_size == 0) return;
+    if (!src) { dst[0] = '\0'; return; }
     size_t i = 0;
     while (src[i] && i < dst_size - 1) {
         dst[i] = src[i];
@@ -77,12 +79,14 @@ static void k_strcpy_truncate(char* dst, const char* src, size_t dst_size) {
 }
 
 static void k_memcpy(void* d, const void* s, size_t n) {
+    if (!d || !s || n == 0) return;
     uint8_t* dd = (uint8_t*)d;
     const uint8_t* ss = (const uint8_t*)s;
     for (size_t i = 0; i < n; i++) dd[i] = ss[i];
 }
 
 static void k_memset(void* d, int val, size_t n) {
+    if (!d || n == 0) return;
     uint8_t* dd = (uint8_t*)d;
     for (size_t i = 0; i < n; i++) dd[i] = (uint8_t)val;
 }
@@ -114,6 +118,7 @@ static int fs_alloc_node(void) {
 }
 
 static int fs_find_child(int parent_idx, const char* name) {
+    if (!name || parent_idx < 0 || parent_idx >= FS_MAX_NODES) return -1;
     for (int i = 0; i < FS_MAX_NODES; i++) {
         if (nodes[i].type != FS_TYPE_FREE &&
             nodes[i].parent == parent_idx &&
@@ -124,13 +129,14 @@ static int fs_find_child(int parent_idx, const char* name) {
 }
 
 static int fs_is_valid_name(const char* name) {
-    if (name[0] == '\0') return 0;
+    if (!name || name[0] == '\0') return 0;
     if (k_streq(name, ".") || k_streq(name, "..")) return 0;
     if (k_strlen(name) >= FS_NAME_MAX) return 0;
     return 1;
 }
 
 enum fs_result fs_mkdir(const char* name) {
+    if (!name) return FS_ERR_INVALID_NAME;
     fs_lock();
     enum fs_result r = FS_OK;
     if (!fs_is_valid_name(name)) { r = FS_ERR_INVALID_NAME; goto out; }
@@ -146,6 +152,7 @@ out:
 }
 
 enum fs_result fs_touch(const char* name) {
+    if (!name) return FS_ERR_INVALID_NAME;
     fs_lock();
     enum fs_result r = FS_OK;
     if (!fs_is_valid_name(name)) { r = FS_ERR_INVALID_NAME; goto out; }
@@ -163,6 +170,7 @@ out:
 }
 
 enum fs_result fs_cd(const char* name) {
+    if (!name || !name[0]) return FS_ERR_NOT_FOUND;
     fs_lock();
     enum fs_result r = FS_OK;
     if (k_streq(name, ".")) goto out;
@@ -186,6 +194,7 @@ out:
 
 /* Free one node slot (must already have no live children if not bulk-free). */
 static void fs_free_slot(int idx) {
+    if (idx < 0 || idx >= FS_MAX_NODES) return;
     nodes[idx].type = FS_TYPE_FREE;
     nodes[idx].content_len = 0;
     nodes[idx].content[0] = '\0';
@@ -196,7 +205,8 @@ static void fs_free_slot(int idx) {
 /* True if cwd is idx or a descendant of idx. */
 static int fs_cwd_in_subtree(int idx) {
     int walk = cwd;
-    while (walk != -1) {
+    int depth = 0;
+    while (walk != -1 && depth++ < FS_MAX_NODES) {
         if (walk == idx) return 1;
         walk = nodes[walk].parent;
     }
@@ -204,10 +214,10 @@ static int fs_cwd_in_subtree(int idx) {
 }
 
 /*
- * Optimized subtree delete for large trees:
- * 1) BFS collect all nodes in subtree (one scan fan-out, O(n) for n=FS_MAX_NODES)
+ * Optimized subtree delete:
+ * 1) BFS collect all nodes in subtree
  * 2) Fix cwd once if inside tree
- * 3) Free all collected slots (no per-child full rescan restart)
+ * 3) Free all collected slots in reverse order
  */
 static enum fs_result fs_rm_subtree(int root_idx) {
     if (root_idx < 0 || root_idx >= FS_MAX_NODES) return FS_ERR_NOT_FOUND;
@@ -247,12 +257,12 @@ static enum fs_result fs_rm_subtree(int root_idx) {
     return FS_OK;
 }
 
-/* Non-recursive: files OK; empty dirs OK; non-empty dir → DIR_NOT_EMPTY */
+/* Non-recursive: files OK; empty dirs OK; non-empty dir -> DIR_NOT_EMPTY */
 enum fs_result fs_rm(const char* name) {
+    if (!name || !name[0]) return FS_ERR_INVALID_NAME;
+    if (name[0] == '/' && name[1] == '\0') return FS_ERR_INVALID_NAME;
     fs_lock();
     enum fs_result r = FS_OK;
-    if (!name || !name[0]) { r = FS_ERR_INVALID_NAME; goto out; }
-    if (name[0] == '/' && name[1] == '\0') { r = FS_ERR_INVALID_NAME; goto out; }
     int idx = fs_find_child(cwd, name);
     if (idx == -1) { r = FS_ERR_NOT_FOUND; goto out; }
     if (nodes[idx].type == FS_TYPE_DIR) {
@@ -271,10 +281,10 @@ out:
 
 /* Recursive: rm -r — delete file or entire directory tree */
 enum fs_result fs_rm_rf(const char* name) {
+    if (!name || !name[0]) return FS_ERR_INVALID_NAME;
+    if (name[0] == '/' && name[1] == '\0') return FS_ERR_INVALID_NAME;
     fs_lock();
     enum fs_result r = FS_OK;
-    if (!name || !name[0]) { r = FS_ERR_INVALID_NAME; goto out; }
-    if (name[0] == '/' && name[1] == '\0') { r = FS_ERR_INVALID_NAME; goto out; }
     int idx = fs_find_child(cwd, name);
     if (idx == -1) { r = FS_ERR_NOT_FOUND; goto out; }
     r = fs_rm_subtree(idx);
@@ -284,22 +294,28 @@ out:
 }
 
 enum fs_result fs_write(const char* name, const char* text) {
+    if (!name || !name[0] || !text) return FS_ERR_INVALID_NAME;
     return fs_write_bin(name, text, k_strlen(text));
 }
 
 enum fs_result fs_write_bin(const char* name, const void* data, size_t len) {
+    if (!name || !name[0]) return FS_ERR_INVALID_NAME;
+    if (len > 0 && !data) return FS_ERR_INVALID_NAME;
+    if (len >= FS_FILE_MAX) return FS_ERR_TOO_BIG;
+
     fs_lock();
     enum fs_result r = FS_OK;
-    if (len >= FS_FILE_MAX) { r = FS_ERR_TOO_BIG; goto out; }
     int idx = fs_find_child(cwd, name);
     if (idx == -1) {
-        fs_unlock(); /* touch takes its own lock */
-        r = fs_touch(name);
-        fs_lock();
-        if (r != FS_OK) goto out;
-        idx = fs_find_child(cwd, name);
+        if (!fs_is_valid_name(name)) { r = FS_ERR_INVALID_NAME; goto out; }
+        idx = fs_alloc_node();
+        if (idx == -1) { r = FS_ERR_NO_SPACE; goto out; }
+        nodes[idx].type = FS_TYPE_FILE;
+        k_strcpy_truncate(nodes[idx].name, name, FS_NAME_MAX);
+        nodes[idx].parent = cwd;
+        nodes[idx].content_len = 0;
+        nodes[idx].content[0] = '\0';
     }
-    if (idx == -1) { r = FS_ERR_NOT_FOUND; goto out; }
     if (nodes[idx].type != FS_TYPE_FILE) { r = FS_ERR_IS_A_DIRECTORY; goto out; }
     k_memcpy(nodes[idx].content, data, len);
     nodes[idx].content[len] = '\0';
@@ -310,18 +326,24 @@ out:
 }
 
 enum fs_result fs_write_at(const char* name, size_t pos, const void* data, size_t len) {
+    if (!name || !name[0]) return FS_ERR_INVALID_NAME;
+    if (len > 0 && !data) return FS_ERR_INVALID_NAME;
+    if (pos >= FS_FILE_MAX || len >= FS_FILE_MAX || pos + len >= FS_FILE_MAX)
+        return FS_ERR_TOO_BIG;
+
     fs_lock();
     enum fs_result r = FS_OK;
-    if (pos + len >= FS_FILE_MAX) { r = FS_ERR_TOO_BIG; goto out; }
     int idx = fs_find_child(cwd, name);
     if (idx == -1) {
-        fs_unlock(); /* touch takes its own lock */
-        r = fs_touch(name);
-        fs_lock();
-        if (r != FS_OK) goto out;
-        idx = fs_find_child(cwd, name);
+        if (!fs_is_valid_name(name)) { r = FS_ERR_INVALID_NAME; goto out; }
+        idx = fs_alloc_node();
+        if (idx == -1) { r = FS_ERR_NO_SPACE; goto out; }
+        nodes[idx].type = FS_TYPE_FILE;
+        k_strcpy_truncate(nodes[idx].name, name, FS_NAME_MAX);
+        nodes[idx].parent = cwd;
+        nodes[idx].content_len = 0;
+        nodes[idx].content[0] = '\0';
     }
-    if (idx == -1) { r = FS_ERR_NOT_FOUND; goto out; }
     if (nodes[idx].type != FS_TYPE_FILE) { r = FS_ERR_IS_A_DIRECTORY; goto out; }
     if (pos > nodes[idx].content_len) {
         k_memset(nodes[idx].content + nodes[idx].content_len, 0, pos - nodes[idx].content_len);
@@ -336,19 +358,21 @@ out:
     return r;
 }
 
-
 enum fs_result fs_append(const char* name, const char* text) {
+    if (!name || !name[0] || !text) return FS_ERR_INVALID_NAME;
     fs_lock();
     enum fs_result r = FS_OK;
     int idx = fs_find_child(cwd, name);
     if (idx == -1) {
-        fs_unlock();
-        r = fs_touch(name);
-        fs_lock();
-        if (r != FS_OK) goto out;
-        idx = fs_find_child(cwd, name);
+        if (!fs_is_valid_name(name)) { r = FS_ERR_INVALID_NAME; goto out; }
+        idx = fs_alloc_node();
+        if (idx == -1) { r = FS_ERR_NO_SPACE; goto out; }
+        nodes[idx].type = FS_TYPE_FILE;
+        k_strcpy_truncate(nodes[idx].name, name, FS_NAME_MAX);
+        nodes[idx].parent = cwd;
+        nodes[idx].content_len = 0;
+        nodes[idx].content[0] = '\0';
     }
-    if (idx == -1) { r = FS_ERR_NOT_FOUND; goto out; }
     if (nodes[idx].type != FS_TYPE_FILE) { r = FS_ERR_IS_A_DIRECTORY; goto out; }
     size_t pos = nodes[idx].content_len;
     if (pos > 0 && pos < FS_FILE_MAX - 1)
@@ -363,24 +387,26 @@ out:
     return r;
 }
 
-
 enum fs_result fs_read(const char* name, const char** out_content, size_t* out_len) {
+    if (!name || !out_content || !out_len) return FS_ERR_NOT_FOUND;
+    fs_lock();
+    enum fs_result r = FS_OK;
     int idx = fs_find_child(cwd, name);
-    if (idx == -1) return FS_ERR_NOT_FOUND;
-    if (nodes[idx].type != FS_TYPE_FILE) return FS_ERR_IS_A_DIRECTORY;
+    if (idx == -1) { r = FS_ERR_NOT_FOUND; goto out; }
+    if (nodes[idx].type != FS_TYPE_FILE) { r = FS_ERR_IS_A_DIRECTORY; goto out; }
     *out_content = nodes[idx].content;
     *out_len = nodes[idx].content_len;
-    return FS_OK;
+out:
+    fs_unlock();
+    return r;
 }
 
 enum fs_result fs_read_path(const char* path, const char** out_content, size_t* out_len) {
-    if (!path || !path[0]) return FS_ERR_NOT_FOUND;
+    if (!path || !path[0] || !out_content || !out_len) return FS_ERR_NOT_FOUND;
 
-    int saved = cwd;
-    int dir = FS_ROOT_INDEX;
-    if (path[0] != '/')
-        dir = cwd;
-
+    fs_lock();
+    enum fs_result r = FS_OK;
+    int dir = (path[0] == '/') ? FS_ROOT_INDEX : cwd;
     const char* p = path;
     if (*p == '/') p++;
 
@@ -391,7 +417,7 @@ enum fs_result fs_read_path(const char* path, const char** out_content, size_t* 
             if (n + 1 < FS_NAME_MAX) component[n] = p[n];
             n++;
         }
-        if (n >= FS_NAME_MAX) { cwd = saved; return FS_ERR_INVALID_NAME; }
+        if (n >= FS_NAME_MAX) { r = FS_ERR_INVALID_NAME; goto out; }
         component[n] = '\0';
         p += n;
         if (*p == '/') p++;
@@ -404,52 +430,64 @@ enum fs_result fs_read_path(const char* path, const char** out_content, size_t* 
         }
 
         int idx = fs_find_child(dir, component);
-        if (idx == -1) { cwd = saved; return FS_ERR_NOT_FOUND; }
+        if (idx == -1) { r = FS_ERR_NOT_FOUND; goto out; }
 
         if (*p == '\0') {
-            if (nodes[idx].type != FS_TYPE_FILE) { cwd = saved; return FS_ERR_IS_A_DIRECTORY; }
+            if (nodes[idx].type != FS_TYPE_FILE) { r = FS_ERR_IS_A_DIRECTORY; goto out; }
             *out_content = nodes[idx].content;
             *out_len = nodes[idx].content_len;
-            cwd = saved;
-            return FS_OK;
+            r = FS_OK;
+            goto out;
         }
-        if (nodes[idx].type != FS_TYPE_DIR) { cwd = saved; return FS_ERR_NOT_A_DIRECTORY; }
+        if (nodes[idx].type != FS_TYPE_DIR) { r = FS_ERR_NOT_A_DIRECTORY; goto out; }
         dir = idx;
     }
-    cwd = saved;
-    return FS_ERR_NOT_FOUND;
+    r = FS_ERR_NOT_FOUND;
+out:
+    fs_unlock();
+    return r;
 }
 
 enum fs_result fs_mkdir_p(const char* path) {
     if (!path || path[0] != '/') return FS_ERR_INVALID_NAME;
-    int saved = cwd;
-    cwd = FS_ROOT_INDEX;
+
+    fs_lock();
+    enum fs_result r = FS_OK;
+    int dir = FS_ROOT_INDEX;
     const char* p = path + 1;
     char component[FS_NAME_MAX];
+
     while (*p) {
         size_t n = 0;
         while (p[n] && p[n] != '/') {
             if (n + 1 < FS_NAME_MAX) component[n] = p[n];
             n++;
         }
+        if (n >= FS_NAME_MAX) { r = FS_ERR_INVALID_NAME; goto out; }
         component[n] = '\0';
         p += n;
         if (*p == '/') p++;
         if (!component[0]) continue;
-        int idx = fs_find_child(cwd, component);
+
+        int idx = fs_find_child(dir, component);
         if (idx == -1) {
-            enum fs_result r = fs_mkdir(component);
-            if (r != FS_OK) { cwd = saved; return r; }
-            idx = fs_find_child(cwd, component);
+            if (!fs_is_valid_name(component)) { r = FS_ERR_INVALID_NAME; goto out; }
+            idx = fs_alloc_node();
+            if (idx == -1) { r = FS_ERR_NO_SPACE; goto out; }
+            nodes[idx].type = FS_TYPE_DIR;
+            k_strcpy_truncate(nodes[idx].name, component, FS_NAME_MAX);
+            nodes[idx].parent = dir;
         }
-        if (nodes[idx].type != FS_TYPE_DIR) { cwd = saved; return FS_ERR_NOT_A_DIRECTORY; }
-        cwd = idx;
+        if (nodes[idx].type != FS_TYPE_DIR) { r = FS_ERR_NOT_A_DIRECTORY; goto out; }
+        dir = idx;
     }
-    cwd = saved;
-    return FS_OK;
+out:
+    fs_unlock();
+    return r;
 }
 
 enum fs_result fs_cp(const char* src, const char* dst) {
+    if (!src || !dst) return FS_ERR_INVALID_NAME;
     fs_lock();
     enum fs_result r = FS_OK;
     int sidx = fs_find_child(cwd, src);
@@ -470,8 +508,8 @@ out:
     return r;
 }
 
-
 enum fs_result fs_mv(const char* src, const char* dst) {
+    if (!src || !dst) return FS_ERR_INVALID_NAME;
     fs_lock();
     enum fs_result r = FS_OK;
     int sidx = fs_find_child(cwd, src);
@@ -484,26 +522,35 @@ out:
     return r;
 }
 
-
 enum fs_result fs_size(const char* name, size_t* out_size) {
+    if (!name || !out_size) return FS_ERR_NOT_FOUND;
+    fs_lock();
+    enum fs_result r = FS_OK;
     int idx = fs_find_child(cwd, name);
-    if (idx == -1) return FS_ERR_NOT_FOUND;
+    if (idx == -1) { r = FS_ERR_NOT_FOUND; goto out; }
     if (nodes[idx].type == FS_TYPE_DIR) {
         *out_size = 0;
-        return FS_ERR_IS_A_DIRECTORY;
+        r = FS_ERR_IS_A_DIRECTORY;
+        goto out;
     }
     *out_size = nodes[idx].content_len;
-    return FS_OK;
+out:
+    fs_unlock();
+    return r;
 }
 
 int fs_node_count(void) {
+    fs_lock();
     int n = 0;
     for (int i = 0; i < FS_MAX_NODES; i++)
         if (nodes[i].type != FS_TYPE_FREE) n++;
+    fs_unlock();
     return n;
 }
 
 int fs_cwd_entry(int index, char* name_out, size_t name_sz, int* is_dir) {
+    if (!name_out || name_sz == 0) return -1;
+    fs_lock();
     int n = 0;
     for (int i = 0; i < FS_MAX_NODES; i++) {
         if (nodes[i].type == FS_TYPE_FREE) continue;
@@ -511,14 +558,17 @@ int fs_cwd_entry(int index, char* name_out, size_t name_sz, int* is_dir) {
         if (n == index) {
             k_strcpy_truncate(name_out, nodes[i].name, name_sz);
             if (is_dir) *is_dir = (nodes[i].type == FS_TYPE_DIR) ? 1 : 0;
+            fs_unlock();
             return 0;
         }
         n++;
     }
+    fs_unlock();
     return -1;
 }
 
 void fs_ls(void) {
+    fs_lock();
     int found_any = 0;
     for (int i = 0; i < FS_MAX_NODES; i++) {
         if (nodes[i].type != FS_TYPE_FREE && nodes[i].parent == cwd) {
@@ -538,9 +588,12 @@ void fs_ls(void) {
     }
     if (!found_any)
         terminal_writestring("  (empty)\n");
+    fs_unlock();
 }
 
 void fs_pwd(char* buffer, size_t buffer_size) {
+    if (!buffer || buffer_size == 0) return;
+    fs_lock();
     int path[FS_MAX_DEPTH];
     int depth = 0;
     int cur = cwd;
@@ -549,8 +602,9 @@ void fs_pwd(char* buffer, size_t buffer_size) {
         cur = nodes[cur].parent;
     }
     size_t pos = 0;
-    if (depth == 1) {
+    if (depth <= 1) {
         k_strcpy_truncate(buffer, "/", buffer_size);
+        fs_unlock();
         return;
     }
     for (int i = depth - 2; i >= 0; i--) {
@@ -560,7 +614,9 @@ void fs_pwd(char* buffer, size_t buffer_size) {
         for (size_t j = 0; j < name_len && pos + 1 < buffer_size; j++)
             buffer[pos++] = name[j];
     }
+    if (pos >= buffer_size) pos = buffer_size - 1;
     buffer[pos] = '\0';
+    fs_unlock();
 }
 
 const char* fs_strerror(enum fs_result err) {

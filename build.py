@@ -192,7 +192,7 @@ def main():
         "-o", str(kernel_bin)
     ] + extra_arch + link_extra + [
         "-Wl,--build-id=none", "-ffreestanding", "-O2", "-nostdlib"
-    ] + [str(o) for o in all_objs]
+    ] + [str(o) for o in all_objs] + ["-lgcc"]
 
     run_cmd(link_cmd, "LINK mykernel.bin")
     print(f"\n[SUCCESS] Kernel built successfully: {kernel_bin} ({kernel_bin.stat().st_size} bytes)")
