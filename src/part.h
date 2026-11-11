@@ -9,6 +9,9 @@ struct disk_info {
     int has_mbr;
     int has_gpt;
     int is_hybrid;
+    uint32_t cylinders;
+    uint32_t heads;
+    uint32_t sectors_per_track;
 };
 
 /* Detect and probe ATA disk presence, capacity, and existing partition scheme */

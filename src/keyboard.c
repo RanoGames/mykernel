@@ -78,6 +78,8 @@ static void keyboard_irq_handler(struct registers* regs) {
             case SC_DOWN:  kbd_buffer_push(KEY_DOWN);  break;
             case SC_LEFT:  kbd_buffer_push(KEY_LEFT);  break;
             case SC_RIGHT: kbd_buffer_push(KEY_RIGHT); break;
+            case 0x5B:     kbd_buffer_push(KEY_SUPER); break; /* Left Win */
+            case 0x5C:     kbd_buffer_push(KEY_SUPER); break; /* Right Win */
             default: break;
         }
         return;

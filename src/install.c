@@ -239,79 +239,158 @@ static void install_fat32_files(void) {
     }
 }
 
+static install_progress_cb g_progress_cb = 0;
+static int g_current_step = 0;
+static char g_status_msg[128];
+
+void install_set_progress_callback(install_progress_cb cb) {
+    g_progress_cb = cb;
+}
+
+int install_get_progress(void) {
+    return g_current_step;
+}
+
+const char* install_get_status_message(void) {
+    return g_status_msg;
+}
+
+static void notify_step(int step_num, int total, const char* msg) {
+    g_current_step = step_num;
+    int i = 0;
+    while (msg && msg[i] && i < (int)sizeof(g_status_msg) - 1) {
+        g_status_msg[i] = msg[i];
+        i++;
+    }
+    g_status_msg[i] = '\0';
+
+    step(msg);
+
+    if (g_progress_cb) {
+        g_progress_cb(step_num, total, msg);
+    }
+}
+
+int install_probe_disk(struct disk_info* out_info) {
+    if (!out_info) return -1;
+    if (part_detect_disk(out_info) != 0 || !out_info->present)
+        return -1;
+    return 0;
+}
+
+int install_step_partition(int mode, const struct disk_info* info, uint32_t* out_start_lba, uint32_t* out_size_sectors) {
+    const uint32_t start_lba = 2048;
+    uint32_t total_sec = (info && info->total_sectors > 0) ? info->total_sectors : 131072;
+    uint32_t size_sectors = 0;
+    if (total_sec > start_lba + 34)
+        size_sectors = total_sec - start_lba - 34;
+    else
+        size_sectors = 65536;
+
+    if (out_start_lba) *out_start_lba = start_lba;
+    if (out_size_sectors) *out_size_sectors = size_sectors;
+
+    if (mode == INSTALL_MODE_MBR) {
+        return part_create_mbr_fat32(start_lba, size_sectors);
+    } else if (mode == INSTALL_MODE_GPT) {
+        return part_create_gpt_fat32(start_lba, size_sectors);
+    } else {
+        return part_create_hybrid_fat32(start_lba, size_sectors);
+    }
+}
+
+int install_step_bootloader(void) {
+    return install_bootloader();
+}
+
+int install_step_format(uint32_t start_lba, uint32_t size_sectors) {
+    if (start_lba == 0) start_lba = 2048;
+    if (size_sectors == 0) size_sectors = 65536;
+    if (fat32_mkfs(start_lba, size_sectors) != FAT_OK)
+        return -1;
+    return 0;
+}
+
+int install_step_kernel(uint32_t start_lba) {
+    if (start_lba == 0) start_lba = 2048;
+    if (install_kernel_image() != 0)
+        return -1;
+
+    fat32_set_partition_lba(start_lba);
+    if (fat32_mount() != FAT_OK)
+        return -1;
+
+    fat32_mkdir("BOOT");
+    fat32_mkdir("BIN");
+    fat32_mkdir("LIB");
+    install_fat32_files();
+    return 0;
+}
+
+int install_step_mount(void) {
+    vfs_mount("/mnt", VFS_FS_FAT32);
+    return 0;
+}
+
 int install_run_mode(int mode) {
-    step("[1/6] Disk Detection: Probing ATA drives...");
+    notify_step(1, INSTALL_STEP_COUNT, "[1/6] Disk Detection: Probing ATA drives...");
     struct disk_info di;
-    if (part_detect_disk(&di) != 0 || !di.present) {
-        step("FAIL: No ATA drive detected on primary IDE controller.");
+    if (install_probe_disk(&di) != 0) {
+        notify_step(1, INSTALL_STEP_COUNT, "FAIL: No ATA drive detected on primary IDE controller.");
         return -1;
     }
     terminal_writestring("      Detected ATA Drive: ");
     terminal_write_uint(di.size_mb);
     terminal_writestring(" MB (");
     terminal_write_uint(di.total_sectors);
-    terminal_writestring(" sectors)\n");
+    terminal_writestring(" sectors, CHS: ");
+    terminal_write_uint(di.cylinders);
+    terminal_putchar('/');
+    terminal_write_uint(di.heads);
+    terminal_putchar('/');
+    terminal_write_uint(di.sectors_per_track);
+    terminal_writestring(")\n");
 
-    const uint32_t start_lba = 2048;
+    uint32_t start_lba = 2048;
     uint32_t size_sectors = 0;
-    if (di.total_sectors > start_lba + 34)
-        size_sectors = di.total_sectors - start_lba - 34;
-    else
-        size_sectors = 65536;
 
-    if (mode == INSTALL_MODE_MBR) {
-        step("[2/6] Partitioning: Writing MBR partition table (LBA 2048)...");
-        if (part_create_mbr_fat32(start_lba, size_sectors) != 0) {
-            step("FAIL: MBR partition creation failed.");
-            return -1;
-        }
-    } else if (mode == INSTALL_MODE_GPT) {
-        step("[2/6] Partitioning: Writing GPT layout (Primary + Backup)...");
-        if (part_create_gpt_fat32(start_lba, size_sectors) != 0) {
-            step("FAIL: GPT partition creation failed.");
-            return -1;
-        }
-    } else {
-        step("[2/6] Partitioning: Writing Hybrid MBR + GPT layout...");
-        if (part_create_hybrid_fat32(start_lba, size_sectors) != 0) {
-            step("FAIL: Hybrid partition creation failed.");
-            return -1;
-        }
-    }
+    const char* part_msg = (mode == INSTALL_MODE_MBR) ?
+        "[2/6] Partitioning: Writing MBR partition table (LBA 2048)..." :
+        ((mode == INSTALL_MODE_GPT) ?
+        "[2/6] Partitioning: Writing GPT layout (Primary + Backup)..." :
+        "[2/6] Partitioning: Writing Hybrid MBR + GPT layout...");
 
-    step("[3/6] Bootloader: Writing MBR & Stage2 bootloader...");
-    if (install_bootloader() != 0) {
-        step("FAIL: Bootloader write failed.");
+    notify_step(2, INSTALL_STEP_COUNT, part_msg);
+    if (install_step_partition(mode, &di, &start_lba, &size_sectors) != 0) {
+        notify_step(2, INSTALL_STEP_COUNT, "FAIL: Partition table creation failed.");
         return -1;
     }
 
-    step("[4/6] Formatting: Initializing FAT32 filesystem (mkfs)...");
-    if (fat32_mkfs(start_lba, size_sectors) != FAT_OK) {
-        step("FAIL: FAT32 format failed.");
+    notify_step(3, INSTALL_STEP_COUNT, "[3/6] Bootloader: Writing MBR & Stage2 bootloader...");
+    if (install_step_bootloader() != 0) {
+        notify_step(3, INSTALL_STEP_COUNT, "FAIL: Bootloader write failed.");
         return -1;
     }
 
-    step("[5/6] Deployment: Writing kernel binary (LBA 8192) & seeding files...");
-    if (install_kernel_image() != 0) {
-        step("FAIL: Kernel image deployment failed.");
+    notify_step(4, INSTALL_STEP_COUNT, "[4/6] Formatting: Initializing FAT32 filesystem (mkfs)...");
+    if (install_step_format(start_lba, size_sectors) != 0) {
+        notify_step(4, INSTALL_STEP_COUNT, "FAIL: FAT32 format failed.");
         return -1;
     }
 
-    fat32_set_partition_lba(start_lba);
-    if (fat32_mount() != FAT_OK) {
-        step("FAIL: FAT32 volume mount failed.");
+    notify_step(5, INSTALL_STEP_COUNT, "[5/6] Deployment: Writing kernel binary (LBA 8192) & seeding files...");
+    if (install_step_kernel(start_lba) != 0) {
+        notify_step(5, INSTALL_STEP_COUNT, "FAIL: Kernel image deployment or file seeding failed.");
         return -1;
     }
 
-    fat32_mkdir("BOOT");
-    fat32_mkdir("BIN");
-    fat32_mkdir("LIB");
-    install_fat32_files();
+    notify_step(6, INSTALL_STEP_COUNT, "[6/6] Mount & Verification: Registering VFS /mnt...");
+    if (install_step_mount() != 0) {
+        notify_step(6, INSTALL_STEP_COUNT, "FAIL: VFS mount failed.");
+        return -1;
+    }
 
-    step("[6/6] Mount & Verification: Registering VFS /mnt...");
-    vfs_mount("/mnt", VFS_FS_FAT32);
-
-    step("SUCCESS: Installation pipeline complete.");
+    notify_step(6, INSTALL_STEP_COUNT, "SUCCESS: Installation pipeline complete.");
     return 0;
 }
 
@@ -336,7 +415,13 @@ void install_wizard(void) {
     terminal_write_uint(di.size_mb);
     terminal_writestring(" MB (");
     terminal_write_uint(di.total_sectors);
-    terminal_writestring(" sectors)\n");
+    terminal_writestring(" sectors, CHS: ");
+    terminal_write_uint(di.cylinders);
+    terminal_putchar('/');
+    terminal_write_uint(di.heads);
+    terminal_putchar('/');
+    terminal_write_uint(di.sectors_per_track);
+    terminal_writestring(")\n");
     terminal_writestring("    - Existing MBR: ");
     terminal_writestring(di.has_mbr ? "Yes" : "No");
     terminal_writestring(" | Existing GPT: ");

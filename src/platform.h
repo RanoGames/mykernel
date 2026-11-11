@@ -7,4 +7,10 @@ int platform_is_virtualbox(void);
 int platform_has_vbe(void);
 void platform_init(void);
 
+/* CPUID architecture & capabilities */
+int platform_cpu_has_cpuid(void);
+int platform_cpu_has_long_mode(void);
+int platform_cpu_has_pae(void);
+const char* platform_cpu_vendor(void);
+
 #endif

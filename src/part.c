@@ -102,6 +102,16 @@ int part_detect_disk(struct disk_info* info) {
         info->total_sectors = 131072; /* fallback 64 MB */
 
     info->size_mb = info->total_sectors / 2048;
+    if (info->total_sectors >= 63 * 255) {
+        info->heads = 255;
+        info->sectors_per_track = 63;
+    } else {
+        info->heads = 16;
+        info->sectors_per_track = 63;
+    }
+    info->cylinders = info->total_sectors / (info->heads * info->sectors_per_track);
+    if (info->cylinders == 0 && info->total_sectors > 0)
+        info->cylinders = 1;
     return 0;
 }
 

@@ -16,5 +16,6 @@ int keyboard_trygetchar(char* out);
 #define KEY_DOWN      ((char)0x12)
 #define KEY_LEFT      ((char)0x13)
 #define KEY_RIGHT     ((char)0x14)
+#define KEY_SUPER     ((char)0x15)
 
 #endif

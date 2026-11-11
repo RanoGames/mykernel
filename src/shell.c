@@ -26,6 +26,7 @@
 #include "vbe.h"
 #include "pong.h"
 #include "desktop.h"
+#include "platform.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -170,7 +171,7 @@ static void read_line(char* buffer, size_t max_len) {
         if (c == '\t') {
             /* Tab-completion: commands + names in cwd */
             static const char* cmds[] = {
-                "help","clear","echo","about","uname","whoami","free","history",
+                "help","clear","echo","about","uname","sysinfo","whoami","free","history",
                 "reboot","shutdown","calc","ls","pwd","cd","mkdir","touch","cat",
                 "rm","write","append","cp","mv","mount","umount","fatmount","fatinfo","fatls","fatcat",
                 "fatwrite","lang","ps","spawn","snake","pong","beep","lspci","beep97",
@@ -385,7 +386,7 @@ static void cmd_dns(const char* arg) {
     net_dns(host);
 }
 static void cmd_help(void) {
-    terminal_writestring("System: help clear echo about uname whoami free history\n");
+    terminal_writestring("System: help clear echo about uname sysinfo whoami free history\n");
     terminal_writestring("        reboot shutdown calc <expr>\n");
     terminal_writestring("RAM FS: ls pwd cd mkdir touch cat write append cp mv\n");
     terminal_writestring("        rm <name> | rm -r <dir>   recursive delete\n");
@@ -419,7 +420,69 @@ static void cmd_calc(const char* expr) {
     terminal_putchar('\n');
 }
 
-static void cmd_uname(void) { terminal_writestring("MyKernel i686 GNU/MyKernel\n"); }
+static void cmd_uname(void) {
+    terminal_writestring("MyKernel i686 GNU/MyKernel\n");
+    terminal_writestring("CPU: ");
+    if (platform_cpu_has_long_mode()) {
+        terminal_writestring("x86_64 (Long Mode supported, PAE active)\n");
+    } else {
+        terminal_writestring("i686 (32-bit x86");
+        if (platform_cpu_has_pae()) terminal_writestring(", PAE supported");
+        terminal_writestring(")\n");
+    }
+    terminal_writestring("Toolchain: i686-elf-gcc (32-bit; transition to 64-bit long mode requires x86_64-elf-gcc)\n");
+}
+
+static void cmd_sysinfo(void) {
+    terminal_writestring("========================================\n");
+    terminal_writestring("          System Information            \n");
+    terminal_writestring("========================================\n");
+    terminal_writestring("OS: MyKernel v0.4 (32-bit Protected Mode)\n");
+    terminal_writestring("Kernel Architecture: i686 (32-bit x86)\n");
+    if (platform_cpu_has_cpuid()) {
+        terminal_writestring("CPU Vendor: ");
+        terminal_writestring(platform_cpu_vendor());
+        terminal_putchar('\n');
+    }
+    terminal_writestring("CPU: ");
+    if (platform_cpu_has_long_mode()) {
+        terminal_writestring("x86_64 (Long Mode supported, PAE active)\n");
+    } else {
+        terminal_writestring("i686 (32-bit x86");
+        if (platform_cpu_has_pae()) terminal_writestring(", PAE supported");
+        terminal_writestring(")\n");
+    }
+    terminal_writestring("Toolchain Constraint:\n");
+    terminal_writestring("  Target compiler: i686-elf-gcc (produces 32-bit ELF binaries).\n");
+    terminal_writestring("  Host hardware:   x86_64 Long Mode & PAE capable.\n");
+    terminal_writestring("  Note: Native 64-bit kernel mode requires x86_64-elf-gcc\n");
+    terminal_writestring("        cross-compiler, 64-bit GDT/IDT, and 4-level PML4 paging.\n");
+
+    size_t used, total, freeb;
+    kmalloc_stats(&used, &total, &freeb);
+    terminal_writestring("Memory: Heap used=");
+    terminal_write_uint((uint32_t)(used / 1024));
+    terminal_writestring(" KB / total=");
+    terminal_write_uint((uint32_t)(total / 1024));
+    terminal_writestring(" KB\n");
+
+    const struct vbe_info* vi = vbe_get_info();
+    terminal_writestring("Display: ");
+    if (vi && vi->active) {
+        terminal_write_uint(vi->width);
+        terminal_putchar('x');
+        terminal_write_uint(vi->height);
+        terminal_writestring(" @ 32 bpp (LFB ");
+        terminal_write_hex(vi->lfb);
+        terminal_writestring(")\n");
+    } else {
+        terminal_writestring("VGA Text 80x25\n");
+    }
+
+    terminal_writestring("Timer: ");
+    terminal_write_uint(timer_hz());
+    terminal_writestring(" Hz PIT channel 0\n");
+}
 static void cmd_whoami(void) { terminal_writestring("root\n"); }
 
 static void cmd_free(void) {
@@ -748,7 +811,8 @@ void shell_execute_command(const char* line) {
         terminal_writestring("MyKernel -- gfx + VBE + settings + snake + pong\n");
     else if (str_equals(line, "reboot")) cmd_reboot();
     else if (str_equals(line, "shutdown")) cmd_shutdown();
-    else if (str_equals(line, "uname")) cmd_uname();
+    else if (str_equals(line, "uname") || str_starts_with(line, "uname ")) cmd_uname();
+    else if (str_equals(line, "sysinfo")) cmd_sysinfo();
     else if (str_equals(line, "whoami")) cmd_whoami();
     else if (str_equals(line, "free")) cmd_free();
     else if (str_equals(line, "history")) cmd_history_list();
