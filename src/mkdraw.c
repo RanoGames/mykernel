@@ -48,6 +48,32 @@ void mk_buf_text(uint32_t* pix, int w, int h, int x, int y, const char* s, uint3
     }
 }
 
+void mk_buf_box(uint32_t* pix, int w, int h, int x, int y, int rw, int rh, uint32_t border, uint32_t fill) {
+    if (rw <= 0 || rh <= 0) return;
+    mk_buf_rect(pix, w, h, x, y, rw, rh, border);
+    if (rw > 2 && rh > 2) {
+        mk_buf_rect(pix, w, h, x + 1, y + 1, rw - 2, rh - 2, fill);
+    }
+}
+
+void mk_buf_btn(uint32_t* pix, int w, int h, int x, int y, int rw, int rh, const char* text, uint32_t bg, uint32_t fg, int pressed) {
+    uint32_t border_hi = pressed ? 0x0015181F : 0x005A6578;
+    uint32_t border_lo = pressed ? 0x005A6578 : 0x0015181F;
+    mk_buf_rect(pix, w, h, x, y, rw, rh, bg);
+    mk_buf_hline(pix, w, h, x, y, rw, border_hi);
+    mk_buf_vline(pix, w, h, x, y, rh, border_hi);
+    mk_buf_hline(pix, w, h, x, y + rh - 1, rw, border_lo);
+    mk_buf_vline(pix, w, h, x + rw - 1, y, rh, border_lo);
+    if (text) {
+        int len = 0;
+        while (text[len]) len++;
+        int tx = x + (rw - len * 8) / 2;
+        int ty = y + (rh - 16) / 2;
+        if (pressed) { tx += 1; ty += 1; }
+        mk_buf_text(pix, w, h, tx, ty, text, fg, bg);
+    }
+}
+
 void mk_fb_char(int x, int y, char c, uint32_t fg, uint32_t bg) {
     const uint8_t* g = gfx_font_glyph((unsigned char)c);
     for (int row = 0; row < 16; row++) {

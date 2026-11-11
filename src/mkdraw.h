@@ -13,6 +13,8 @@ void mk_buf_char(uint32_t* pix, int w, int h, int x, int y, char c, uint32_t fg,
 void mk_buf_text(uint32_t* pix, int w, int h, int x, int y, const char* s, uint32_t fg, uint32_t bg);
 
 /* Same helpers drawing directly to VBE LFB */
+void mk_buf_box(uint32_t* pix, int w, int h, int x, int y, int rw, int rh, uint32_t border, uint32_t fill);
+void mk_buf_btn(uint32_t* pix, int w, int h, int x, int y, int rw, int rh, const char* text, uint32_t bg, uint32_t fg, int pressed);
 void mk_fb_char(int x, int y, char c, uint32_t fg, uint32_t bg);
 void mk_fb_text(int x, int y, const char* s, uint32_t fg, uint32_t bg);
 

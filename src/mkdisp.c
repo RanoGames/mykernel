@@ -4,7 +4,14 @@
 #include "gfx.h"
 #include "kmalloc.h"
 #include "mouse.h"
+#include "timer.h"
 #include <stddef.h>
+
+static int g_start_active = 0;
+
+void mk_panel_set_start_active(int active) {
+    g_start_active = active;
+}
 
 static struct mk_surface g_surf[MK_MAX_SURFACES];
 static int g_active;
@@ -161,6 +168,54 @@ void mk_surface_raise(int id) {
     }
 }
 
+void mk_surface_minimize(int id) {
+    if (id < 0 || id >= MK_MAX_SURFACES || !g_surf[id].used) return;
+    g_surf[id].mapped = 0;
+}
+
+void mk_surface_restore(int id) {
+    if (id < 0 || id >= MK_MAX_SURFACES || !g_surf[id].used) return;
+    g_surf[id].mapped = 1;
+    mk_surface_raise(id);
+}
+
+int mk_surface_is_minimized(int id) {
+    if (id < 0 || id >= MK_MAX_SURFACES || !g_surf[id].used) return 0;
+    return !g_surf[id].mapped;
+}
+
+int mk_switch_resolution(int vbe_mode_id) {
+    if (vbe_set_mode(vbe_mode_id) != 0)
+        return -1;
+    const struct vbe_info* vi = vbe_get_info();
+    if (!vi || !vi->active) return -1;
+    g_sw = (int)vi->width;
+    g_sh = (int)vi->height;
+    mouse_set_bounds(g_sw - 1, g_sh - 1);
+
+    uint32_t need = (uint32_t)g_sw * (uint32_t)g_sh * 4u;
+    if (need > 0 && need <= MK_BACK_MAX) {
+        for (uint32_t i = 0; i < need / 4u; i++) g_back[i] = 0;
+        g_back_ok = 1;
+    }
+
+    for (int i = 0; i < MK_MAX_SURFACES; i++) {
+        if (g_surf[i].used) {
+            if (g_surf[i].x + g_surf[i].w > g_sw) {
+                g_surf[i].x = (g_sw > g_surf[i].w) ? (g_sw - g_surf[i].w) : 0;
+            }
+            if (g_surf[i].y + MK_TITLE_H + g_surf[i].h > g_sh - MK_PANEL_H) {
+                int max_y = g_sh - MK_PANEL_H - MK_TITLE_H - g_surf[i].h;
+                g_surf[i].y = (max_y > 0) ? max_y : 0;
+            }
+            g_surf[i].dirty = 1;
+        }
+    }
+    cursor_under_valid = 0;
+    mk_compose();
+    return 0;
+}
+
 void mk_surface_move(int id, int x, int y) {
     if (id < 0 || id >= MK_MAX_SURFACES || !g_surf[id].used) return;
     if (x < 0) x = 0;
@@ -248,16 +303,25 @@ static void draw_window(struct mk_surface* s, int focused) {
     int fy = s->y;
     int fw = s->w;
     int fh = s->h + MK_TITLE_H;
-    uint32_t title_bg = focused ? 0x00007ACC : 0x00666666;
-    uint32_t border = 0x00222222;
+    uint32_t title_bg = focused ? 0x000078D7 : 0x003A404D;
+    uint32_t border = 0x001B1E24;
 
     bb_fill(fx - 1, fy - 1, fw + 2, fh + 2, border);
     bb_fill(fx, fy, fw, MK_TITLE_H, title_bg);
 
+    /* Minimize button '_' */
+    int mx = fx + fw - 42;
+    int my = fy + 4;
+    bb_fill(mx, my, 16, 16, focused ? 0x001F5A96 : 0x002B303C);
+    bb_fill(mx + 3, my + 11, 10, 2, 0x00FFFFFF);
+
+    /* Close button 'X' */
     int cx = fx + fw - 22;
     int cy = fy + 4;
     bb_fill(cx, cy, 16, 16, 0x00E81123);
     bb_text(cx + 4, cy, "X", 0x00FFFFFF, 0x00E81123);
+
+    /* Title text */
     bb_text(fx + 8, fy + 4, s->title, 0x00FFFFFF, title_bg);
 
     if (s->pixels) {
@@ -274,34 +338,185 @@ static void draw_window(struct mk_surface* s, int focused) {
 }
 
 
-/* Panel button geometry (for hit-test from desktop) */
-#define PANEL_BTN_W 80
-#define PANEL_BTN_H 20
+/* Panel geometry & hit-testing */
+#define PANEL_BTN_H 22
 
 void mk_panel_power_rects(int* reboot_x, int* shut_x, int* by, int* bw, int* bh) {
-    int y = g_sh - MK_PANEL_H;
-    if (by) *by = y + 4;
-    if (bw) *bw = PANEL_BTN_W;
+    int py = g_sh - MK_PANEL_H;
+    int clk_x = g_sw - 76 - 4;
+    int sx = clk_x - 68 - 4;
+    int rx = sx - 58 - 4;
+    if (by) *by = py + 3;
+    if (bw) *bw = 58;
     if (bh) *bh = PANEL_BTN_H;
-    if (reboot_x) *reboot_x = g_sw - (PANEL_BTN_W * 2 + 16);
-    if (shut_x) *shut_x = g_sw - (PANEL_BTN_W + 8);
+    if (reboot_x) *reboot_x = rx;
+    if (shut_x) *shut_x = sx;
 }
 
 static void draw_panel(void) {
-    int y = g_sh - MK_PANEL_H;
-    bb_fill(0, y, g_sw, MK_PANEL_H, 0x001F1F1F);
-    bb_fill(0, y, g_sw, 1, 0x00444444);
-    /* Windows-like Start button */
-    bb_fill(4, y + 3, 88, MK_PANEL_H - 6, 0x00005A9E);
-    bb_fill(6, y + 5, 84, MK_PANEL_H - 10, 0x000078D7);
-    bb_text(22, y + 6, "Start", 0x00FFFFFF, 0x000078D7);
+    int py = g_sh - MK_PANEL_H;
+    bb_fill(0, py, g_sw, MK_PANEL_H, 0x00181A20);
+    bb_fill(0, py, g_sw, 1, 0x00333A48);
 
-    int rx, sx, by, bw, bh;
-    mk_panel_power_rects(&rx, &sx, &by, &bw, &bh);
-    bb_fill(rx, by, bw, bh, 0x00C19C00); /* reboot - amber */
-    bb_text(rx + 12, by + 2, "Reboot", 0x00FFFFFF, 0x00C19C00);
-    bb_fill(sx, by, bw, bh, 0x00C42B1C); /* shutdown - red */
-    bb_text(sx + 4, by + 2, "Shutdown", 0x00FFFFFF, 0x00C42B1C);
+    /* 1. Start button */
+    int st_x = 4, st_y = py + 3, st_w = 78, st_h = 22;
+    uint32_t st_bg = g_start_active ? 0x000E3F66 : 0x000078D7;
+    bb_fill(st_x, st_y, st_w, st_h, st_bg);
+    bb_fill(st_x, st_y, st_w, 1, g_start_active ? 0x0008233A : 0x0038A6F0);
+    bb_fill(st_x, st_y + st_h - 1, st_w, 1, g_start_active ? 0x00266B9E : 0x00004578);
+
+    /* Windows 4-color squares icon */
+    bb_fill(st_x + 6,  st_y + 5, 5, 5, 0x00E81123);
+    bb_fill(st_x + 12, st_y + 5, 5, 5, 0x00107C10);
+    bb_fill(st_x + 6,  st_y + 11, 5, 5, 0x000078D7);
+    bb_fill(st_x + 12, st_y + 11, 5, 5, 0x00FFB900);
+    bb_text(st_x + 24, st_y + 3, "Start", 0x00FFFFFF, st_bg);
+
+    /* 2. Tray Clock */
+    int clk_w = 76, clk_h = 22;
+    int clk_x = g_sw - clk_w - 4;
+    int clk_y = py + 3;
+    bb_fill(clk_x, clk_y, clk_w, clk_h, 0x0010141C);
+    bb_fill(clk_x, clk_y, clk_w, 1, 0x000A0D12);
+    bb_fill(clk_x, clk_y, 1, clk_h, 0x000A0D12);
+    bb_fill(clk_x, clk_y + clk_h - 1, clk_w, 1, 0x002D3748);
+    bb_fill(clk_x + clk_w - 1, clk_y, 1, clk_h, 0x002D3748);
+
+    /* Format uptime into HH:MM:SS */
+    uint32_t hz = timer_hz();
+    if (hz == 0) hz = 100;
+    uint32_t sec = timer_ticks() / hz;
+    uint32_t m = (sec / 60) % 60;
+    uint32_t s = sec % 60;
+    uint32_t h = (sec / 3600) % 24;
+    char clk_str[10];
+    clk_str[0] = (char)('0' + (h / 10));
+    clk_str[1] = (char)('0' + (h % 10));
+    clk_str[2] = ':';
+    clk_str[3] = (char)('0' + (m / 10));
+    clk_str[4] = (char)('0' + (m % 10));
+    clk_str[5] = ':';
+    clk_str[6] = (char)('0' + (s / 10));
+    clk_str[7] = (char)('0' + (s % 10));
+    clk_str[8] = '\0';
+    bb_text(clk_x + 6, clk_y + 3, clk_str, 0x0038BDF8, 0x0010141C);
+
+    /* 3. Power buttons */
+    int shut_w = 68, shut_h = 22;
+    int shut_x = clk_x - shut_w - 4;
+    int shut_y = py + 3;
+    bb_fill(shut_x, shut_y, shut_w, shut_h, 0x00C42B1C);
+    bb_fill(shut_x, shut_y, shut_w, 1, 0x00E85D4E);
+    bb_text(shut_x + 4, shut_y + 3, "Shutdown", 0x00FFFFFF, 0x00C42B1C);
+
+    int reb_w = 58, reb_h = 22;
+    int reb_x = shut_x - reb_w - 4;
+    int reb_y = py + 3;
+    bb_fill(reb_x, reb_y, reb_w, reb_h, 0x00C19C00);
+    bb_fill(reb_x, reb_y, reb_w, 1, 0x00F0C830);
+    bb_text(reb_x + 5, reb_y + 3, "Reboot", 0x00FFFFFF, 0x00C19C00);
+
+    /* 4. Taskbar Window Buttons */
+    int win_start_x = st_x + st_w + 6;
+    int win_end_x = reb_x - 6;
+    int win_avail_w = win_end_x - win_start_x;
+    int open_count = 0;
+    for (int i = 0; i < MK_MAX_SURFACES; i++) {
+        if (g_surf[i].used) open_count++;
+    }
+
+    if (open_count > 0 && win_avail_w > 40) {
+        int bw = (win_avail_w - (open_count - 1) * 4) / open_count;
+        if (bw > 120) bw = 120;
+        if (bw < 44) bw = 44;
+        int top_id = (g_z_count > 0) ? g_z_order[g_z_count - 1] : -1;
+        int cur_x = win_start_x;
+
+        for (int i = 0; i < MK_MAX_SURFACES; i++) {
+            if (!g_surf[i].used) continue;
+            int is_top = (i == top_id && g_surf[i].mapped);
+            int is_min = (!g_surf[i].mapped);
+
+            uint32_t btn_bg = is_top ? 0x00264F78 : (is_min ? 0x0014161C : 0x00262B35);
+            uint32_t btn_fg = is_top ? 0x00FFFFFF : (is_min ? 0x00788296 : 0x00CBD5E1);
+
+            bb_fill(cur_x, py + 3, bw, 22, btn_bg);
+            bb_fill(cur_x, py + 3, bw, 1, is_top ? 0x0038BDF8 : 0x003E4657);
+            bb_fill(cur_x, py + 24, bw, 1, 0x00101216);
+
+            if (is_top) {
+                bb_fill(cur_x + 2, py + 23, bw - 4, 2, 0x0038BDF8);
+            }
+
+            /* Small app dot badge */
+            uint32_t dot_color = is_top ? 0x0038BDF8 : (is_min ? 0x00556070 : 0x00A0AEC0);
+            bb_fill(cur_x + 5, py + 9, 6, 6, dot_color);
+
+            /* Truncate title to fit button width */
+            int max_chars = (bw - 18) / 8;
+            if (max_chars > 0) {
+                char tbuf[16];
+                int ti = 0;
+                while (g_surf[i].title[ti] && ti < max_chars && ti < 15) {
+                    tbuf[ti] = g_surf[i].title[ti];
+                    ti++;
+                }
+                tbuf[ti] = '\0';
+                bb_text(cur_x + 14, py + 3, tbuf, btn_fg, btn_bg);
+            }
+
+            cur_x += bw + 4;
+        }
+    }
+}
+
+int mk_panel_hit_test(int mx, int my, int* window_id) {
+    int py = g_sh - MK_PANEL_H;
+    if (my < py || my >= g_sh) return MK_PANEL_HIT_NONE;
+
+    /* Start button */
+    if (mx >= 4 && mx < 4 + 78) return MK_PANEL_HIT_START;
+
+    /* Clock */
+    int clk_w = 76;
+    int clk_x = g_sw - clk_w - 4;
+    if (mx >= clk_x && mx < clk_x + clk_w) return MK_PANEL_HIT_CLOCK;
+
+    /* Shutdown */
+    int shut_w = 68;
+    int shut_x = clk_x - shut_w - 4;
+    if (mx >= shut_x && mx < shut_x + shut_w) return MK_PANEL_HIT_SHUTDOWN;
+
+    /* Reboot */
+    int reb_w = 58;
+    int reb_x = shut_x - reb_w - 4;
+    if (mx >= reb_x && mx < reb_x + reb_w) return MK_PANEL_HIT_REBOOT;
+
+    /* Window buttons */
+    int win_start_x = 4 + 78 + 6;
+    int win_end_x = reb_x - 6;
+    int win_avail_w = win_end_x - win_start_x;
+    int open_count = 0;
+    for (int i = 0; i < MK_MAX_SURFACES; i++) {
+        if (g_surf[i].used) open_count++;
+    }
+
+    if (open_count > 0 && mx >= win_start_x && mx < win_end_x) {
+        int bw = (win_avail_w - (open_count - 1) * 4) / open_count;
+        if (bw > 120) bw = 120;
+        if (bw < 44) bw = 44;
+        int cur_x = win_start_x;
+        for (int i = 0; i < MK_MAX_SURFACES; i++) {
+            if (!g_surf[i].used) continue;
+            if (mx >= cur_x && mx < cur_x + bw) {
+                if (window_id) *window_id = i;
+                return MK_PANEL_HIT_WINDOW;
+            }
+            cur_x += bw + 4;
+        }
+    }
+
+    return MK_PANEL_HIT_NONE;
 }
 
 /* ---- cursor: ONLY on LFB (never baked into backbuffer) ---- */
@@ -432,11 +647,12 @@ void mk_compose(void) {
     }
 }
 
-int mk_hit_test(int sx, int sy, int* local_x, int* local_y, int* on_title, int* on_close) {
+int mk_hit_test_ext(int sx, int sy, int* local_x, int* local_y, int* on_title, int* on_close, int* on_min) {
     if (local_x) *local_x = 0;
     if (local_y) *local_y = 0;
     if (on_title) *on_title = 0;
     if (on_close) *on_close = 0;
+    if (on_min) *on_min = 0;
 
     for (int z = g_z_count - 1; z >= 0; z--) {
         int i = g_z_order[z];
@@ -451,8 +667,13 @@ int mk_hit_test(int sx, int sy, int* local_x, int* local_y, int* on_title, int* 
             if (on_title) *on_title = 1;
             int cx = x0 + s->w - 22;
             int cy = y0 + 4;
-            if (sx >= cx && sx < cx + 16 && sy >= cy && sy < cy + 16)
+            if (sx >= cx && sx < cx + 16 && sy >= cy && sy < cy + 16) {
                 if (on_close) *on_close = 1;
+            }
+            int mx = x0 + s->w - 42;
+            if (sx >= mx && sx < mx + 16 && sy >= cy && sy < cy + 16) {
+                if (on_min) *on_min = 1;
+            }
         } else {
             if (local_x) *local_x = sx - x0;
             if (local_y) *local_y = sy - (y0 + MK_TITLE_H);
@@ -460,4 +681,8 @@ int mk_hit_test(int sx, int sy, int* local_x, int* local_y, int* on_title, int* 
         return i;
     }
     return -1;
+}
+
+int mk_hit_test(int sx, int sy, int* local_x, int* local_y, int* on_title, int* on_close) {
+    return mk_hit_test_ext(sx, sy, local_x, local_y, on_title, on_close, 0);
 }

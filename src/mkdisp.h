@@ -23,12 +23,16 @@ struct mk_surface {
 int  mk_init(int vbe_mode_id);
 void mk_shutdown(void);
 int  mk_is_active(void);
+int  mk_switch_resolution(int vbe_mode_id);
 
 /* Create surface; returns id >= 0 or -1. Allocates pixel buffer via kmalloc. */
 int  mk_surface_create(int w, int h, const char* title);
 void mk_surface_destroy(int id);
 void mk_surface_move(int id, int x, int y);
 void mk_surface_raise(int id);
+void mk_surface_minimize(int id);
+void mk_surface_restore(int id);
+int  mk_surface_is_minimized(int id);
 void mk_surface_set_title(int id, const char* title);
 void mk_surface_commit(int id);          /* mark dirty + compose */
 struct mk_surface* mk_surface_get(int id);
@@ -42,10 +46,20 @@ void mk_cursor_invalidate(void);
 
 /* Hit-test: topmost surface under (sx,sy), including title bar. Returns id or -1. */
 int  mk_hit_test(int sx, int sy, int* local_x, int* local_y, int* on_title, int* on_close);
+int  mk_hit_test_ext(int sx, int sy, int* local_x, int* local_y, int* on_title, int* on_close, int* on_min);
 
 int  mk_screen_w(void);
 int  mk_screen_h(void);
 
+#define MK_PANEL_HIT_NONE     0
+#define MK_PANEL_HIT_START    1
+#define MK_PANEL_HIT_WINDOW   2
+#define MK_PANEL_HIT_REBOOT   3
+#define MK_PANEL_HIT_SHUTDOWN 4
+#define MK_PANEL_HIT_CLOCK    5
+
+int  mk_panel_hit_test(int mx, int my, int* hit_window_id);
+void mk_panel_set_start_active(int active);
 void mk_panel_power_rects(int* reboot_x, int* shut_x, int* by, int* bw, int* bh);
 
 #endif
