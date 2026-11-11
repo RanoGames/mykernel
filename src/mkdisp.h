@@ -5,6 +5,10 @@
 
 #include <stdint.h>
 
+#ifndef VBE_MODE_1920x1080
+#define VBE_MODE_1920x1080 3
+#endif
+
 #define MK_MAX_SURFACES  8
 #define MK_TITLE_H       24
 #define MK_PANEL_H       28

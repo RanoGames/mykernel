@@ -20,8 +20,13 @@ static void (*g_desktop_overlay)(void) = 0;
 static uint32_t g_wallpaper = 0x002B579A; /* Win7-ish blue */
 static int g_sw, g_sh;
 /* Off-screen compose buffer (placed at 32 MiB to avoid collision with dyld libs @ 6-14 MiB and mmap arena) */
+/* Supports up to 1080p: 1920x1080x4 = 8,294,400 bytes */
+#ifndef VBE_MODE_1920x1080
+#define VBE_MODE_1920x1080 3
+#endif
+
 #define MK_BACK_BASE 0x02000000u
-#define MK_BACK_MAX  (1024u * 768u * 4u)
+#define MK_BACK_MAX  (1920u * 1080u * 4u)
 static uint32_t* g_back;
 static int g_back_ok;
 
@@ -195,7 +200,16 @@ int mk_switch_resolution(int vbe_mode_id) {
 
     uint32_t need = (uint32_t)g_sw * (uint32_t)g_sh * 4u;
     if (need > 0 && need <= MK_BACK_MAX) {
-        for (uint32_t i = 0; i < need / 4u; i++) g_back[i] = 0;
+        void* dst = (void*)g_back;
+        uint32_t count = need / 4u;
+        uint32_t val = 0;
+        __asm__ volatile (
+            "cld\n\t"
+            "rep stosl\n\t"
+            : "+D"(dst), "+c"(count)
+            : "a"(val)
+            : "memory"
+        );
         g_back_ok = 1;
     }
 
@@ -291,11 +305,18 @@ static void flip_to_lfb(void) {
     if (!g_back_ok || !g_active) return;
     const struct vbe_info* vi = vbe_get_info();
     if (!vi || !vi->active || !vi->lfb) return;
-    volatile uint32_t* fb = (volatile uint32_t*)(uint32_t)vi->lfb;
-    uint32_t n = (uint32_t)g_sw * (uint32_t)g_sh;
-    /* single blast — no tearing mid-frame */
-    for (uint32_t i = 0; i < n; i++)
-        fb[i] = g_back[i];
+    void* dst = (void*)(uint32_t)vi->lfb;
+    const void* src = (const void*)g_back;
+    uint32_t count = (uint32_t)g_sw * (uint32_t)g_sh;
+
+    /* High-speed burst DMA/MMIO transfer to LFB via hardware rep movsl */
+    __asm__ volatile (
+        "cld\n\t"
+        "rep movsl\n\t"
+        : "+D"(dst), "+S"(src), "+c"(count)
+        :
+        : "memory"
+    );
 }
 
 static void draw_window(struct mk_surface* s, int focused) {
@@ -548,8 +569,14 @@ static void cursor_restore_under(void) {
 static void cursor_save_under(int x, int y) {
     if (!g_active) return;
     for (int row = 0; row < MK_CURSOR_H; row++) {
+        int py = y + row;
         for (int col = 0; col < MK_CURSOR_W; col++) {
-            cursor_under[row * MK_CURSOR_W + col] = lfb_get(x + col, y + row);
+            int px = x + col;
+            if (g_back_ok && (unsigned)px < (unsigned)g_sw && (unsigned)py < (unsigned)g_sh) {
+                cursor_under[row * MK_CURSOR_W + col] = g_back[py * g_sw + px];
+            } else {
+                cursor_under[row * MK_CURSOR_W + col] = lfb_get(px, py);
+            }
         }
     }
     cursor_ux = x;

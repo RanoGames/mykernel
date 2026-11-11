@@ -307,37 +307,43 @@ static void paint_display(struct mk_surface* s) {
     int m0_act = (cur_w == 640);
     int m1_act = (cur_w == 800);
     int m2_act = (cur_w == 1024);
+    int m3_act = (cur_w == 1920);
 
-    mk_buf_btn(s->pixels, s->w, s->h, 14, 66, 96, 26, m0_act ? "[*] 640x480" : "640x480",
+    mk_buf_btn(s->pixels, s->w, s->h, 14, 66, 92, 26, m0_act ? "[*] 640x480" : "640x480",
                m0_act ? 0x000E4A7A : 0x0028303F, m0_act ? 0x0038BDF8 : 0x00FFFFFF, m0_act);
-    mk_buf_btn(s->pixels, s->w, s->h, 118, 66, 96, 26, m1_act ? "[*] 800x600" : "800x600",
+    mk_buf_btn(s->pixels, s->w, s->h, 114, 66, 92, 26, m1_act ? "[*] 800x600" : "800x600",
                m1_act ? 0x000E4A7A : 0x0028303F, m1_act ? 0x0038BDF8 : 0x00FFFFFF, m1_act);
-    mk_buf_btn(s->pixels, s->w, s->h, 222, 66, 104, 26, m2_act ? "[*] 1024x768" : "1024x768",
+    mk_buf_btn(s->pixels, s->w, s->h, 214, 66, 96, 26, m2_act ? "[*] 1024x768" : "1024x768",
                m2_act ? 0x000E4A7A : 0x0028303F, m2_act ? 0x0038BDF8 : 0x00FFFFFF, m2_act);
+    mk_buf_btn(s->pixels, s->w, s->h, 318, 66, 96, 26, m3_act ? "[*] 1080p" : "1080p (FHD)",
+               m3_act ? 0x000E4A7A : 0x0028303F, m3_act ? 0x0038BDF8 : 0x00FFFFFF, m3_act);
 
     /* Timer HZ Section */
-    mk_buf_text(s->pixels, s->w, s->h, 14, 104, "Display Refresh / Timer Frequency:", 0x00E2E8F0, 0x001B202A);
+    mk_buf_text(s->pixels, s->w, s->h, 14, 104, "Display Refresh / Timer Frequency (Cadence):", 0x00E2E8F0, 0x001B202A);
     uint32_t cur_hz = timer_hz();
     int h50  = (cur_hz == 50);
     int h100 = (cur_hz == 100);
+    int h144 = (cur_hz == 144);
     int h200 = (cur_hz == 200);
     int h500 = (cur_hz == 500);
 
-    mk_buf_btn(s->pixels, s->w, s->h, 14, 124, 70, 24, h50  ? "[*] 50Hz" : "50 Hz",
+    mk_buf_btn(s->pixels, s->w, s->h, 14, 124, 72, 24, h50  ? "[*] 50Hz" : "50 Hz",
                h50  ? 0x00105C2B : 0x0028303F, h50  ? 0x004ADE80 : 0x00FFFFFF, h50);
-    mk_buf_btn(s->pixels, s->w, s->h, 92, 124, 74, 24, h100 ? "[*] 100Hz" : "100 Hz",
+    mk_buf_btn(s->pixels, s->w, s->h, 94, 124, 72, 24, h100 ? "[*] 100Hz" : "100 Hz",
                h100 ? 0x00105C2B : 0x0028303F, h100 ? 0x004ADE80 : 0x00FFFFFF, h100);
-    mk_buf_btn(s->pixels, s->w, s->h, 174, 124, 74, 24, h200 ? "[*] 200Hz" : "200 Hz",
+    mk_buf_btn(s->pixels, s->w, s->h, 174, 124, 76, 24, h144 ? "[*] 144Hz" : "144 Hz",
+               h144 ? 0x00105C2B : 0x0028303F, h144 ? 0x004ADE80 : 0x00FFFFFF, h144);
+    mk_buf_btn(s->pixels, s->w, s->h, 258, 124, 72, 24, h200 ? "[*] 200Hz" : "200 Hz",
                h200 ? 0x00105C2B : 0x0028303F, h200 ? 0x004ADE80 : 0x00FFFFFF, h200);
-    mk_buf_btn(s->pixels, s->w, s->h, 256, 124, 70, 24, h500 ? "[*] 500Hz" : "500 Hz",
+    mk_buf_btn(s->pixels, s->w, s->h, 338, 124, 76, 24, h500 ? "[*] 500Hz" : "500 Hz",
                h500 ? 0x00105C2B : 0x0028303F, h500 ? 0x004ADE80 : 0x00FFFFFF, h500);
 
     /* Hardware Info Box */
-    mk_buf_box(s->pixels, s->w, s->h, 10, 158, s->w - 20, 72, 0x002D3748, 0x00141820);
-    mk_buf_text(s->pixels, s->w, s->h, 16, 164, "Adapter: Bochs / QEMU DISPI Linear Framebuffer", 0x00CBD5E1, 0x00141820);
-    mk_buf_text(s->pixels, s->w, s->h, 16, 184, "Depth: 32 bpp TrueColor  | VBE Mode Active", 0x0094A3B8, 0x00141820);
+    mk_buf_box(s->pixels, s->w, s->h, 10, 158, s->w - 20, 74, 0x002D3748, 0x00141820);
+    mk_buf_text(s->pixels, s->w, s->h, 16, 164, "Adapter: Bochs / QEMU DISPI Linear Framebuffer (32 MB)", 0x00CBD5E1, 0x00141820);
+    mk_buf_text(s->pixels, s->w, s->h, 16, 184, "Pipeline: 32 bpp TrueColor | rep movsl DMA Burst Transfer", 0x0094A3B8, 0x00141820);
 
-    char res_buf[48];
+    char res_buf[64];
     char sw_str[12], sh_str[12], hz_str[12];
     u32_to_str((uint32_t)cur_w, sw_str);
     u32_to_str((uint32_t)mk_screen_h(), sh_str);
@@ -351,7 +357,7 @@ static void paint_display(struct mk_surface* s) {
     const char* hp = " @ ";
     while (*hp) res_buf[ri++] = *hp++;
     for (int j = 0; hz_str[j]; j++) res_buf[ri++] = hz_str[j];
-    const char* fz = " Hz (PIT IRQ0)";
+    const char* fz = (cur_hz == 144) ? " Hz [144 FPS Jitter-Free]" : " Hz (PIT IRQ0)";
     while (*fz) res_buf[ri++] = *fz++;
     res_buf[ri] = '\0';
     mk_buf_text(s->pixels, s->w, s->h, 16, 204, res_buf, 0x00FACC15, 0x00141820);
@@ -360,23 +366,27 @@ static void paint_display(struct mk_surface* s) {
 static void display_on_click(int lx, int ly) {
     /* Resolution buttons at y = 66, h = 26 */
     if (ly >= 66 && ly < 92) {
-        if (lx >= 14 && lx < 110) {
+        if (lx >= 14 && lx < 106) {
             mk_switch_resolution(VBE_MODE_640x480);
-        } else if (lx >= 118 && lx < 214) {
+        } else if (lx >= 114 && lx < 206) {
             mk_switch_resolution(VBE_MODE_800x600);
-        } else if (lx >= 222 && lx < 326) {
+        } else if (lx >= 214 && lx < 310) {
             mk_switch_resolution(VBE_MODE_1024x768);
+        } else if (lx >= 318 && lx < 414) {
+            mk_switch_resolution(VBE_MODE_1920x1080);
         }
     }
     /* Timer HZ buttons at y = 124, h = 24 */
     else if (ly >= 124 && ly < 148) {
-        if (lx >= 14 && lx < 84) {
+        if (lx >= 14 && lx < 86) {
             timer_init(50);
-        } else if (lx >= 92 && lx < 166) {
+        } else if (lx >= 94 && lx < 166) {
             timer_init(100);
-        } else if (lx >= 174 && lx < 248) {
+        } else if (lx >= 174 && lx < 250) {
+            timer_init(144);
+        } else if (lx >= 258 && lx < 330) {
             timer_init(200);
-        } else if (lx >= 256 && lx < 326) {
+        } else if (lx >= 338 && lx < 414) {
             timer_init(500);
         }
     }
@@ -388,7 +398,7 @@ static void open_display(void) {
         active_focus_id = id_display;
         return;
     }
-    OPEN_APP(id_display, 340, 240, "Display Settings", paint_display);
+    OPEN_APP(id_display, 430, 246, "Display Settings", paint_display);
 }
 
 /* ========================================================================= */
@@ -1525,8 +1535,8 @@ void desktop_run(void) {
     int drag_off_x = 0, drag_off_y = 0;
     int prev_buttons = 0;
     int need_redraw = 1;
-    uint32_t last_draw = timer_ticks();
-    uint32_t last_clock = timer_ticks();
+    uint32_t last_clock_tick = timer_ticks();
+    uint32_t last_tasks_tick = timer_ticks();
 
     for (;;) {
         char k;
@@ -1765,8 +1775,13 @@ void desktop_run(void) {
             dragging = 0;
 
         if (dragging && drag_id >= 0 && (buttons & 1)) {
-            mk_surface_move(drag_id, m.x - drag_off_x, m.y - drag_off_y);
-            need_redraw = 1;
+            int new_x = m.x - drag_off_x;
+            int new_y = m.y - drag_off_y;
+            struct mk_surface* ds = mk_surface_get(drag_id);
+            if (ds && (ds->x != new_x || ds->y != new_y)) {
+                mk_surface_move(drag_id, new_x, new_y);
+                need_redraw = 1;
+            }
         }
 
         /* Periodic Timer Updates */
@@ -1774,16 +1789,17 @@ void desktop_run(void) {
             uint32_t now = timer_ticks();
             uint32_t hz = timer_hz();
             if (hz == 0) hz = 100;
-            if (surface_alive(id_clock) && (now - last_clock) >= hz) {
+            if (surface_alive(id_clock) && (now - last_clock_tick) >= hz) {
                 paint_clock(mk_surface_get(id_clock));
                 mk_surface_commit(id_clock);
                 need_redraw = 1;
-                last_clock = now;
+                last_clock_tick = now;
             }
-            if (surface_alive(id_tasks) && (now - last_clock) >= (hz / 2)) {
+            if (surface_alive(id_tasks) && (now - last_tasks_tick) >= (hz / 2)) {
                 paint_tasks(mk_surface_get(id_tasks));
                 mk_surface_commit(id_tasks);
                 need_redraw = 1;
+                last_tasks_tick = now;
             }
         }
 
@@ -1795,15 +1811,10 @@ void desktop_run(void) {
         }
 
         if (need_redraw) {
-            uint32_t now = timer_ticks();
-            uint32_t min_dt = dragging ? 1 : 0;
-            if ((now - last_draw) >= min_dt || left_up || left_down) {
-                mk_compose();
-                need_redraw = 0;
-                last_draw = now;
-                last_mx = m.x;
-                last_my = m.y;
-            }
+            mk_compose();
+            need_redraw = 0;
+            last_mx = m.x;
+            last_my = m.y;
         } else if (mouse_moved) {
             mk_cursor_move(m.x, m.y);
         }
