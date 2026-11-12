@@ -148,6 +148,34 @@ void net_get_dns(uint8_t out_dns[4]) {
     for (int i = 0; i < 4; i++) out_dns[i] = g_dns[i];
 }
 
+void net_get_netmask(uint8_t out_mask[4]) {
+    if (!out_mask) return;
+    for (int i = 0; i < 4; i++) out_mask[i] = g_netmask[i];
+}
+
+int net_set_config(const uint8_t ip[4], const uint8_t netmask[4], const uint8_t gw[4], const uint8_t dns[4]) {
+    if (ip) {
+        for (int i = 0; i < 4; i++) g_ip[i] = ip[i];
+    }
+    if (netmask) {
+        for (int i = 0; i < 4; i++) g_netmask[i] = netmask[i];
+    }
+    if (gw) {
+        for (int i = 0; i < 4; i++) g_gateway[i] = gw[i];
+    }
+    if (dns) {
+        for (int i = 0; i < 4; i++) g_dns[i] = dns[i];
+    }
+    for (int i = 0; i < ARP_CACHE_SIZE; i++) {
+        g_arp_cache[i].valid = 0;
+    }
+    return 0;
+}
+
+int net_parse_ipv4(const char* s, uint8_t* out) {
+    return parse_ipv4(s, out);
+}
+
 void net_get_stats(net_stats_t* out) {
     if (!out) return;
     for (size_t i = 0; i < sizeof(net_stats_t); i++) {
@@ -808,6 +836,11 @@ int net_ping(const char* host, int count) {
     print_ip(target_ip);
     terminal_writestring(") 56(84) bytes of data.\n");
 
+    if (!is_loop && target_ip[0] == 192 && target_ip[1] == 168 && g_ip[0] == 10 && g_ip[1] == 0) {
+        terminal_writestring("Notice: Destination 192.168.x.x is outside QEMU SLIRP guest subnet (10.0.2.15/24).\n");
+        terminal_writestring("        Virtual router gateway is 10.0.2.2 (try 'ping 10.0.2.2').\n");
+    }
+
     if (is_loop) {
         int received = 0;
         uint32_t min_rtt = 0xFFFFFFFF, max_rtt = 0, sum_rtt = 0;
@@ -990,6 +1023,22 @@ int net_ping(const char* host, int count) {
         if (max_rtt == 0) terminal_writestring("<1");
         else terminal_write_uint(max_rtt);
         terminal_writestring(" ms\n");
+    } else {
+        if (target_ip[0] == 192 && target_ip[1] == 168) {
+            terminal_writestring("\n[!] Diagnostic Hint: You are running inside QEMU SLIRP user-mode network.\n");
+            terminal_writestring("    In QEMU SLIRP:\n");
+            terminal_writestring("      - Guest IP:       10.0.2.15\n");
+            terminal_writestring("      - Virtual Router: 10.0.2.2\n");
+            terminal_writestring("      - Virtual DNS:    10.0.2.3\n");
+            terminal_writestring("    Physical LAN IPs (such as 192.168.0.1 or 192.168.1.1) are host private\n");
+            terminal_writestring("    and cannot be reached via SLIRP. Try 'ping 10.0.2.2' to test the router\n");
+            terminal_writestring("    or 'ping 8.8.8.8' / 'ping google.com' for external internet.\n");
+        } else {
+            terminal_writestring("\n[!] Diagnostic Hint: No ICMP echo reply received.\n");
+            terminal_writestring("    - Under QEMU SLIRP, the virtual gateway is 10.0.2.2 (try 'ping 10.0.2.2').\n");
+            terminal_writestring("    - Real router/WAN destinations can be configured via:\n");
+            terminal_writestring("      ifconfig <ip> <netmask> <gw> [dns]\n");
+        }
     }
 
     return (received > 0) ? 0 : -1;

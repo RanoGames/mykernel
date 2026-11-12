@@ -277,9 +277,9 @@ def main():
     run_cmd(link_cmd, "LINK mykernel.bin")
     print(f"\n[SUCCESS] Kernel built successfully: {kernel_bin} ({kernel_bin.stat().st_size} bytes)")
 
-    # 5. Bootloader & disk image (optional / if requested)
-    if action in ("disk", "all-disk"):
-        print("\n--- Building Bootloader & disk.img ---")
+    # 5. Bootloader & disk / ISO image (optional / if requested)
+    if action in ("disk", "all-disk", "iso", "run-iso"):
+        print("\n--- Building Bootloader & Disk / ISO Image ---")
         mbr_bin = BUILD_DIR / "mbr.bin"
         mbr_o = BUILD_DIR / "mbr.o"
         mbr_elf = BUILD_DIR / "mbr.elf"
@@ -301,13 +301,18 @@ def main():
         raw_bin = BUILD_DIR / "mykernel.raw"
         run_cmd([objcopy, "-O", "binary", str(kernel_bin), str(raw_bin)], "OBJCOPY mykernel.raw")
 
-        disk_img = ROOT_DIR / "disk.img"
-        run_cmd([sys.executable, str(BOOT_DIR / "mkdisk.py"), str(kernel_bin), str(mbr_bin), str(stage2_bin), str(disk_img), str(raw_bin)], "MKDISK disk.img")
+        if action in ("disk", "all-disk"):
+            disk_img = ROOT_DIR / "disk.img"
+            run_cmd([sys.executable, str(BOOT_DIR / "mkdisk.py"), str(kernel_bin), str(mbr_bin), str(stage2_bin), str(disk_img), str(raw_bin)], "MKDISK disk.img")
+
+        if action in ("iso", "run-iso"):
+            iso_img = ROOT_DIR / "mykernel.iso"
+            run_cmd([sys.executable, str(BOOT_DIR / "mkiso.py"), str(kernel_bin), str(mbr_bin), str(stage2_bin), str(iso_img), str(raw_bin)], "MKISO mykernel.iso")
 
     # 6. Run if requested
     run_actions = (
         "run", "run-disk", "run-hdd", "runhdd", "run_hdd",
-        "run-with-hdd", "run-disk-hdd", "boot-hdd", "run-installed"
+        "run-with-hdd", "run-disk-hdd", "boot-hdd", "run-installed", "run-iso"
     )
     if action in run_actions or any(arg in ("--hdd", "+hdd", "-hdd") for arg in sys.argv):
         qemu = find_qemu()
@@ -340,6 +345,13 @@ def main():
             qemu_cmd = [
                 qemu, "-kernel", str(kernel_bin), "-m", "128",
                 "-hda", str(HDD_IMG),
+                "-vga", "std", "-global", "VGA.vgamem_mb=32", "-net", "nic,model=rtl8139", "-net", "user",
+                "-audiodev", "dsound,id=spk", "-machine", "pcspk-audiodev=spk"
+            ]
+        elif action == "run-iso":
+            iso_img = ROOT_DIR / "mykernel.iso"
+            qemu_cmd = [
+                qemu, "-cdrom", str(iso_img), "-boot", "d", "-m", "128",
                 "-vga", "std", "-global", "VGA.vgamem_mb=32", "-net", "nic,model=rtl8139", "-net", "user",
                 "-audiodev", "dsound,id=spk", "-machine", "pcspk-audiodev=spk"
             ]

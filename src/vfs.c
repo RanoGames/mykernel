@@ -176,10 +176,92 @@ int vfs_is_mounted(enum vfs_fs_type type) {
 
 #include "fs.h"
 
-/* Unified ls/cat through mount table */
+int vfs_auto_mount(void) {
+    if (!fat32_is_mounted()) {
+        if (fat32_mount() != FAT_OK) {
+            return -1;
+        }
+    }
+    fs_mkdir_p("/mnt/c");
+    fs_mkdir_p("/c");
+    vfs_mount("/mnt/c", VFS_FS_FAT32);
+    vfs_mount("/c", VFS_FS_FAT32);
+    return 0;
+}
+
+void vfs_normalize_path(const char* path, char* out, size_t out_max) {
+    if (!out || out_max == 0) return;
+    char combined[128];
+    if (!path || !path[0]) {
+        fs_pwd(out, out_max);
+        return;
+    }
+    if (path[0] == '/') {
+        int i = 0;
+        while (path[i] && i < 127) { combined[i] = path[i]; i++; }
+        combined[i] = '\0';
+    } else {
+        char cwd[64];
+        fs_pwd(cwd, sizeof(cwd));
+        int i = 0;
+        while (cwd[i] && i < 63) { combined[i] = cwd[i]; i++; }
+        if (i > 0 && combined[i - 1] != '/' && i < 126) {
+            combined[i++] = '/';
+        }
+        int j = 0;
+        while (path[j] && i < 127) {
+            combined[i++] = path[j++];
+        }
+        combined[i] = '\0';
+    }
+
+    char tokens[16][32];
+    int token_count = 0;
+    const char* p = combined;
+    while (*p) {
+        while (*p == '/') p++;
+        if (!*p) break;
+        char tok[32];
+        int t = 0;
+        while (*p && *p != '/' && t < 31) tok[t++] = *p++;
+        tok[t] = '\0';
+
+        if (tok[0] == '.' && tok[1] == '\0') {
+            /* ignore */
+        } else if (tok[0] == '.' && tok[1] == '.' && tok[2] == '\0') {
+            if (token_count > 0) token_count--;
+        } else if (token_count < 16) {
+            int k = 0;
+            while (tok[k]) { tokens[token_count][k] = tok[k]; k++; }
+            tokens[token_count][k] = '\0';
+            token_count++;
+        }
+    }
+
+    if (token_count == 0) {
+        if (out_max > 1) { out[0] = '/'; out[1] = '\0'; }
+        else out[0] = '\0';
+        return;
+    }
+
+    size_t pos = 0;
+    for (int i = 0; i < token_count; i++) {
+        if (pos + 1 < out_max) out[pos++] = '/';
+        int k = 0;
+        while (tokens[i][k] && pos + 1 < out_max) {
+            out[pos++] = tokens[i][k++];
+        }
+    }
+    if (pos >= out_max) pos = out_max - 1;
+    out[pos] = '\0';
+}
+
 void vfs_ls_path(const char* path) {
+    char full[128];
+    vfs_normalize_path(path, full, sizeof(full));
+
     char rest[64];
-    enum vfs_fs_type ty = vfs_resolve(path ? path : "/", rest, sizeof(rest));
+    enum vfs_fs_type ty = vfs_resolve(full, rest, sizeof(rest));
     if (ty == VFS_FS_FAT32) {
         if (!fat32_is_mounted()) {
             terminal_writestring("FAT32 not mounted\n");
@@ -187,26 +269,136 @@ void vfs_ls_path(const char* path) {
         }
         fat32_ls(rest[0] ? rest : "/");
     } else {
-        if (rest[0]) {
-            /* try cd into path for RAM — simple: only list cwd for now */
-            terminal_writestring("(ramfs) use: cd + ls  or absolute under /\n");
-        }
         fs_ls();
     }
 }
 
 void vfs_cat_path(const char* path) {
+    char full[128];
+    vfs_normalize_path(path, full, sizeof(full));
+
     char rest[64];
-    enum vfs_fs_type ty = vfs_resolve(path ? path : "", rest, sizeof(rest));
+    enum vfs_fs_type ty = vfs_resolve(full, rest, sizeof(rest));
     if (ty == VFS_FS_FAT32) {
         fat32_cat(rest);
     } else {
         const char* content; size_t len;
-        if (fs_read_path(path, &content, &len) == FS_OK || fs_read(rest, &content, &len) == FS_OK) {
+        if (fs_read_path(full, &content, &len) == FS_OK || fs_read(path, &content, &len) == FS_OK) {
             terminal_writestring(content);
             terminal_putchar('\n');
         } else {
             terminal_writestring("not found\n");
         }
+    }
+}
+
+enum fs_result vfs_cd(const char* path) {
+    char full[128];
+    vfs_normalize_path(path, full, sizeof(full));
+
+    char rest[64];
+    enum vfs_fs_type ty = vfs_resolve(full, rest, sizeof(rest));
+    if (ty == VFS_FS_FAT32) {
+        fs_mkdir_p(full);
+        return fs_cd(full);
+    } else {
+        return fs_cd(path);
+    }
+}
+
+static enum fs_result fat_to_fs_err(enum fat_result fr) {
+    switch (fr) {
+        case FAT_OK: return FS_OK;
+        case FAT_ERR_NOT_FOUND: return FS_ERR_NOT_FOUND;
+        case FAT_ERR_EXISTS: return FS_ERR_ALREADY_EXISTS;
+        case FAT_ERR_IS_DIR: return FS_ERR_IS_A_DIRECTORY;
+        case FAT_ERR_NOT_DIR: return FS_ERR_NOT_A_DIRECTORY;
+        case FAT_ERR_NO_SPACE: return FS_ERR_NO_SPACE;
+        case FAT_ERR_NOT_EMPTY: return FS_ERR_DIR_NOT_EMPTY;
+        case FAT_ERR_TOO_BIG: return FS_ERR_TOO_BIG;
+        default: return FS_ERR_NOT_FOUND;
+    }
+}
+
+enum fs_result vfs_touch(const char* path) {
+    char full[128];
+    vfs_normalize_path(path, full, sizeof(full));
+
+    char rest[64];
+    enum vfs_fs_type ty = vfs_resolve(full, rest, sizeof(rest));
+    if (ty == VFS_FS_FAT32) {
+        enum fat_result fr = fat32_write(rest, "");
+        return fat_to_fs_err(fr);
+    } else {
+        return fs_touch(path);
+    }
+}
+
+enum fs_result vfs_write(const char* path, const char* text) {
+    char full[128];
+    vfs_normalize_path(path, full, sizeof(full));
+
+    char rest[64];
+    enum vfs_fs_type ty = vfs_resolve(full, rest, sizeof(rest));
+    if (ty == VFS_FS_FAT32) {
+        enum fat_result fr = fat32_write(rest, text ? text : "");
+        return fat_to_fs_err(fr);
+    } else {
+        return fs_write(path, text);
+    }
+}
+
+enum fs_result vfs_append(const char* path, const char* text) {
+    char full[128];
+    vfs_normalize_path(path, full, sizeof(full));
+
+    char rest[64];
+    enum vfs_fs_type ty = vfs_resolve(full, rest, sizeof(rest));
+    if (ty == VFS_FS_FAT32) {
+        char buf[1024];
+        size_t existing_len = 0;
+        fat32_read_file(rest, buf, sizeof(buf) - 1, &existing_len);
+        buf[existing_len] = '\0';
+        int t = 0;
+        while (text && text[t] && existing_len + t < sizeof(buf) - 1) {
+            buf[existing_len + t] = text[t];
+            t++;
+        }
+        buf[existing_len + t] = '\0';
+        enum fat_result fr = fat32_write(rest, buf);
+        return fat_to_fs_err(fr);
+    } else {
+        return fs_append(path, text);
+    }
+}
+
+enum fs_result vfs_mkdir(const char* path) {
+    char full[128];
+    vfs_normalize_path(path, full, sizeof(full));
+
+    char rest[64];
+    enum vfs_fs_type ty = vfs_resolve(full, rest, sizeof(rest));
+    if (ty == VFS_FS_FAT32) {
+        enum fat_result fr = fat32_mkdir(rest);
+        fs_mkdir_p(full);
+        return fat_to_fs_err(fr);
+    } else {
+        return fs_mkdir(path);
+    }
+}
+
+enum fs_result vfs_rm(const char* path, int recursive) {
+    (void)recursive;
+    char full[128];
+    vfs_normalize_path(path, full, sizeof(full));
+
+    char rest[64];
+    enum vfs_fs_type ty = vfs_resolve(full, rest, sizeof(rest));
+    if (ty == VFS_FS_FAT32) {
+        enum fat_result fr = fat32_unlink(rest);
+        fs_rm(full);
+        return fat_to_fs_err(fr);
+    } else {
+        return recursive ? fs_rm_rf(path) : fs_rm(path);
     }
 }

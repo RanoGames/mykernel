@@ -330,6 +330,7 @@ int install_step_kernel(uint32_t start_lba) {
 
 int install_step_mount(void) {
     vfs_mount("/mnt", VFS_FS_FAT32);
+    vfs_auto_mount();
     return 0;
 }
 

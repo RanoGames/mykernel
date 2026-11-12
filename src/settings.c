@@ -176,14 +176,10 @@ void settings_menu(void) {
     show_status();
     terminal_writestring(
         "  1) Toggle sound\n"
-        "  2) System res: 640x480 (VBE console)\n"
-        "  3) System res: 800x600 (VBE console)\n"
-        "  4) System res: 1024x768 (VBE console)\n"
-        "  5) Prefer VBE + enable FB console\n"
-        "  6) Prefer Mode13 + text 80x25\n"
-        "  7) Test VBE now (demo)\n"
-        "  8) Save to FAT (SETTINGS.CFG)\n"
-        "  9) Load from FAT\n"
+        "  2) Prefer graphical VBE mode\n"
+        "  3) Prefer VGA text mode (80x25)\n"
+        "  4) Save to FAT (SETTINGS.CFG)\n"
+        "  5) Load from FAT\n"
         "  0) Exit\n"
     );
 
@@ -202,61 +198,22 @@ void settings_menu(void) {
             g_cfg.sound_enabled = !g_cfg.sound_enabled;
             terminal_writestring(g_cfg.sound_enabled ? "sound on\n" : "sound off\n");
             if (g_cfg.sound_enabled) sound_beep_ok();
-        } else if (c == '2' || c == '3' || c == '4' || c == '5') {
+        } else if (c == '2') {
             if (platform_is_virtualbox()) {
-                terminal_writestring("VBE console not supported on VirtualBox.\n");
-                terminal_writestring("Use option 6 (Mode13) or run under QEMU.\n");
+                terminal_writestring("VBE not supported on VirtualBox; using text mode.\n");
                 g_cfg.gfx_use_vbe = 0;
-            } else if (c == '2') {
-                g_cfg.gfx_mode = 0;
-                g_cfg.gfx_use_vbe = 1;
-                if (terminal_enable_fb(0) == 0)
-                    terminal_writestring("system console: 640x480 VBE\n");
-                else {
-                    g_cfg.gfx_use_vbe = 0;
-                    terminal_writestring("VBE failed\n");
-                }
-            } else if (c == '3') {
-                g_cfg.gfx_mode = 1;
-                g_cfg.gfx_use_vbe = 1;
-                if (terminal_enable_fb(1) == 0)
-                    terminal_writestring("system console: 800x600 VBE\n");
-                else {
-                    g_cfg.gfx_use_vbe = 0;
-                    terminal_writestring("VBE failed\n");
-                }
-            } else if (c == '4') {
-                g_cfg.gfx_mode = 2;
-                g_cfg.gfx_use_vbe = 1;
-                if (terminal_enable_fb(2) == 0)
-                    terminal_writestring("system console: 1024x768 VBE\n");
-                else {
-                    g_cfg.gfx_use_vbe = 0;
-                    terminal_writestring("VBE failed\n");
-                }
             } else {
                 g_cfg.gfx_use_vbe = 1;
-                if (terminal_enable_fb(g_cfg.gfx_mode) == 0)
-                    terminal_writestring("prefer VBE + FB console on\n");
-                else {
-                    g_cfg.gfx_use_vbe = 0;
-                    terminal_writestring("VBE failed\n");
-                }
+                terminal_writestring("preferred graphics: VBE enabled\n");
             }
-        } else if (c == '6') {
+        } else if (c == '3') {
             g_cfg.gfx_use_vbe = 0;
             terminal_disable_fb();
             gfx_restore_text();
-            terminal_writestring("prefer Mode13, text 80x25 restored\n");
-        } else if (c == '7') {
-            if (platform_is_virtualbox())
-                terminal_writestring("VBE demo skipped on VirtualBox\n");
-            else
-                vbe_demo();
-            gfx_restore_text();
-        } else if (c == '8') {
+            terminal_writestring("preferred graphics: VGA text 80x25\n");
+        } else if (c == '4') {
             settings_save_fat();
-        } else if (c == '9') {
+        } else if (c == '5') {
             settings_load_fat();
         }
         show_status();

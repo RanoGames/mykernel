@@ -11,8 +11,14 @@
 
 static volatile int mx, my;
 static volatile int mbuttons;
-static volatile int mdx, mdy;
+static volatile int mdx, mdy, mdz;
 static int bound_w = 320, bound_h = 200;
+static int has_wheel = 0;
+static uint8_t mouse_dev_id = 0;
+
+int mouse_has_wheel(void) {
+    return has_wheel;
+}
 
 #define EVQ 32
 static struct mouse_event evq[EVQ];
@@ -51,7 +57,7 @@ static void ev_push(const struct mouse_event* e) {
 static void mouse_irq_handler(struct registers* regs) {
     (void)regs;
     static uint8_t cycle;
-    static uint8_t packet[3];
+    static uint8_t packet[4];
 
     uint8_t data = inb(KBD_DATA);
 
@@ -59,13 +65,25 @@ static void mouse_irq_handler(struct registers* regs) {
         return; /* resync */
 
     packet[cycle++] = data;
-    if (cycle < 3) return;
+    int packet_size = has_wheel ? 4 : 3;
+    if (cycle < packet_size) return;
     cycle = 0;
 
     int dx = (int)(int8_t)packet[1];
     int dy = (int)(int8_t)packet[2];
-    /* Y в PS/2 инвертирован относительно экрана */
+    /* Y in PS/2 is inverted relative to screen */
     dy = -dy;
+
+    int dz = 0;
+    if (has_wheel) {
+        int8_t raw_z = (int8_t)packet[3];
+        if (mouse_dev_id == 4) {
+            raw_z = (int8_t)(packet[3] & 0x0F);
+            if (raw_z & 0x08) raw_z |= 0xF0;
+        }
+        if (raw_z > 0) dz = 1;
+        else if (raw_z < 0) dz = -1;
+    }
 
     int buttons = packet[0] & 0x07;
 
@@ -78,12 +96,14 @@ static void mouse_irq_handler(struct registers* regs) {
 
     mdx += dx;
     mdy += dy;
+    mdz += dz;
     mbuttons = buttons;
 
     struct mouse_event ev;
     ev.x = mx;
     ev.y = my;
     ev.buttons = buttons;
+    ev.dz = 0;
 
     if (dx || dy) {
         ev.type = 0;
@@ -104,15 +124,25 @@ static void mouse_irq_handler(struct registers* regs) {
         }
         prev_buttons = buttons;
     }
+
+    if (dz != 0) {
+        ev.type = 2; /* Wheel event */
+        ev.button = 0;
+        ev.pressed = 0;
+        ev.dz = dz;
+        ev_push(&ev);
+    }
 }
 
 void mouse_init(void) {
     mx = 160;
     my = 100;
     mbuttons = 0;
-    mdx = mdy = 0;
+    mdx = mdy = mdz = 0;
     ev_head = ev_tail = 0;
     prev_buttons = 0;
+    has_wheel = 0;
+    mouse_dev_id = 0;
 
     /* enable auxiliary device */
     mouse_wait_write();
@@ -134,6 +164,21 @@ void mouse_init(void) {
     mouse_write(0xF6);
     mouse_read(); /* ACK */
 
+    /* IntelliMouse wheel probe sequence: set sample rates 200, 100, 80 */
+    mouse_write(0xF3); mouse_read();
+    mouse_write(200);  mouse_read();
+    mouse_write(0xF3); mouse_read();
+    mouse_write(100);  mouse_read();
+    mouse_write(0xF3); mouse_read();
+    mouse_write(80);   mouse_read();
+
+    /* Query device ID */
+    mouse_write(0xF2); mouse_read(); /* ACK */
+    mouse_dev_id = mouse_read();
+    if (mouse_dev_id == 3 || mouse_dev_id == 4) {
+        has_wheel = 1;
+    }
+
     /* enable streaming */
     mouse_write(0xF4);
     mouse_read();
@@ -147,9 +192,11 @@ void mouse_get(struct mouse_state* out) {
     out->y = my;
     out->dx = mdx;
     out->dy = mdy;
+    out->dz = mdz;
     out->buttons = mbuttons;
     mdx = 0;
     mdy = 0;
+    mdz = 0;
 }
 
 int mouse_poll_event(struct mouse_event* ev) {

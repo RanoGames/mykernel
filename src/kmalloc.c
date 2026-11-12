@@ -7,8 +7,8 @@
 #include "kmalloc.h"
 #include <stdint.h>
 
-#define KHEAP_START 0x200000u
-#define KHEAP_SIZE  0x100000u /* 1 МБ */
+#define KHEAP_START 0x03000000u /* 48 MiB (safe upper memory in 128 MB RAM) */
+#define KHEAP_SIZE  0x01000000u /* 16 MiB */
 #define ALIGN       8u
 #define BLOCK_MAGIC 0x4B4D414Cu /* "KMAL" */
 

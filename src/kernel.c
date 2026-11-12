@@ -22,6 +22,7 @@
 #include "shell.h"
 #include "settings.h"
 #include "vbe.h"
+#include "desktop.h"
 
 void kernel_main(void) {
     gdt_init();
@@ -47,10 +48,14 @@ void kernel_main(void) {
     sched_init();
     timer_init(100); /* PIT IRQ0 @ 100 Hz (10 ms/tick) */
 
-    if (ata_init() == 0)
+    if (ata_init() == 0) {
         terminal_writestring("ATA: disk detected\n");
-    else
+        if (vfs_auto_mount() == 0) {
+            terminal_writestring("VFS: FAT32 auto-mounted at /mnt/c and /c\n");
+        }
+    } else {
         terminal_writestring("ATA: no disk\n");
+    }
 
     __asm__ volatile ("sti");
 
@@ -58,6 +63,10 @@ void kernel_main(void) {
     settings_init();
     vbe_probe();
 
-    terminal_writestring("Ready. settings | vbetest | snake | pong | help\n");
+    /* Boot directly into graphical desktop environment by default */
+    desktop_run();
+
+    terminal_writestring("Desktop exited. Falling back to native shell.\n");
+    terminal_writestring("Type 'desktop' to return to graphical desktop environment.\n");
     shell_run();
 }

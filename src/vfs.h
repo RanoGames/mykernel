@@ -4,7 +4,7 @@
 
 #include "fs.h"
 
-#define VFS_MAX_MOUNTS 4
+#define VFS_MAX_MOUNTS 8
 #define VFS_MP_NAME_MAX 16
 
 enum vfs_fs_type {
@@ -34,7 +34,20 @@ enum vfs_fs_type vfs_resolve(const char* path, char* rest_out, int rest_max);
 
 int vfs_is_mounted(enum vfs_fs_type type);
 
-void vfs_ls_path(const char* path);
-void vfs_cat_path(const char* path);
+/* Auto-mount FAT32 volume to /mnt/c and /c if disk/FAT32 is present */
+int vfs_auto_mount(void);
+
+/* Normalize relative/absolute path against current working directory */
+void vfs_normalize_path(const char* path, char* out, size_t out_max);
+
+/* Unified VFS operations dispatching between RAM FS and FAT32 */
+void           vfs_ls_path(const char* path);
+void           vfs_cat_path(const char* path);
+enum fs_result vfs_cd(const char* path);
+enum fs_result vfs_touch(const char* path);
+enum fs_result vfs_write(const char* path, const char* text);
+enum fs_result vfs_append(const char* path, const char* text);
+enum fs_result vfs_mkdir(const char* path);
+enum fs_result vfs_rm(const char* path, int recursive);
 
 #endif

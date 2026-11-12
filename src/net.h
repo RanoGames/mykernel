@@ -22,8 +22,11 @@ void net_init(void);
 int  net_is_online(void);
 void net_get_mac(uint8_t out_mac[6]);
 void net_get_ip(uint8_t out_ip[4]);
+void net_get_netmask(uint8_t out_mask[4]);
 void net_get_gateway(uint8_t out_gw[4]);
 void net_get_dns(uint8_t out_dns[4]);
+int  net_set_config(const uint8_t ip[4], const uint8_t netmask[4], const uint8_t gw[4], const uint8_t dns[4]);
+int  net_parse_ipv4(const char* s, uint8_t* out);
 
 /* Real ICMP ping: works on 127.0.0.1 (loopback), IP addresses, and hostnames (via DNS) */
 int  net_ping(const char* host, int count);

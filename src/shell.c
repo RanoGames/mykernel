@@ -369,7 +369,62 @@ static void cmd_ping(const char* arg) {
     net_ping(host, 4);
 }
 
-static void cmd_ifconfig(void) {
+static void cmd_ifconfig(const char* args) {
+    while (args && *args == ' ') args++;
+    if (!args || !*args) {
+        net_dump_stats();
+        return;
+    }
+
+    char ip_str[32], mask_str[32], gw_str[32], dns_str[32];
+    ip_str[0] = mask_str[0] = gw_str[0] = dns_str[0] = '\0';
+
+    int n = 0;
+    while (*args && *args != ' ' && n < 31) ip_str[n++] = *args++;
+    ip_str[n] = '\0';
+    while (*args == ' ') args++;
+
+    n = 0;
+    while (*args && *args != ' ' && n < 31) mask_str[n++] = *args++;
+    mask_str[n] = '\0';
+    while (*args == ' ') args++;
+
+    n = 0;
+    while (*args && *args != ' ' && n < 31) gw_str[n++] = *args++;
+    gw_str[n] = '\0';
+    while (*args == ' ') args++;
+
+    n = 0;
+    while (*args && *args != ' ' && n < 31) dns_str[n++] = *args++;
+    dns_str[n] = '\0';
+
+    if (!ip_str[0] || !mask_str[0] || !gw_str[0]) {
+        terminal_writestring("Usage: ifconfig                         (show status)\n");
+        terminal_writestring("       ifconfig <ip> <netmask> <gw> [dns] (configure IP)\n");
+        terminal_writestring("Example: ifconfig 192.168.1.50 255.255.255.0 192.168.1.1 1.1.1.1\n");
+        return;
+    }
+
+    uint8_t ip[4], mask[4], gw[4], dns[4];
+    if (net_parse_ipv4(ip_str, ip) != 0 ||
+        net_parse_ipv4(mask_str, mask) != 0 ||
+        net_parse_ipv4(gw_str, gw) != 0) {
+        terminal_writestring("ifconfig: Invalid IPv4 address format.\n");
+        return;
+    }
+
+    int has_dns = 0;
+    if (dns_str[0]) {
+        if (net_parse_ipv4(dns_str, dns) == 0) {
+            has_dns = 1;
+        } else {
+            terminal_writestring("ifconfig: Invalid DNS IPv4 address format.\n");
+            return;
+        }
+    }
+
+    net_set_config(ip, mask, gw, has_dns ? dns : 0);
+    terminal_writestring("Interface eth0 updated:\n");
     net_dump_stats();
 }
 
@@ -400,7 +455,7 @@ static void cmd_help(void) {
     terminal_writestring("GUI:    desktop\n");
     terminal_writestring("PCI:    lspci beep97 [freq]\n");
     terminal_writestring("Programs: exec <name>   (example: exec hello)\n");
-    terminal_writestring("Config: settings vbetest\n");
+    terminal_writestring("Config: settings\n");
 }
 
 static void cmd_reboot(void) {
@@ -516,17 +571,17 @@ static void cmd_pwd(void) {
 
 static void cmd_cd(const char* arg) {
     if (arg[0] == '\0') { terminal_writestring("Usage: cd <dir>\n"); return; }
-    enum fs_result r = fs_cd(arg);
+    enum fs_result r = vfs_cd(arg);
     if (r != FS_OK) print_fs_error(r);
 }
 static void cmd_mkdir(const char* arg) {
     if (arg[0] == '\0') { terminal_writestring("Usage: mkdir <name>\n"); return; }
-    enum fs_result r = fs_mkdir(arg);
+    enum fs_result r = vfs_mkdir(arg);
     if (r != FS_OK) print_fs_error(r);
 }
 static void cmd_touch(const char* arg) {
     if (arg[0] == '\0') { terminal_writestring("Usage: touch <name>\n"); return; }
-    enum fs_result r = fs_touch(arg);
+    enum fs_result r = vfs_touch(arg);
     if (r != FS_OK) print_fs_error(r);
 }
 static void cmd_rm(const char* arg) {
@@ -547,23 +602,19 @@ static void cmd_rm(const char* arg) {
         terminal_writestring("Usage: rm [-r|-rf] <name>\n");
         return;
     }
-    enum fs_result r = recursive ? fs_rm_rf(arg) : fs_rm(arg);
+    enum fs_result r = vfs_rm(arg, recursive);
     if (r != FS_OK) print_fs_error(r);
 }
 static void cmd_cat(const char* arg) {
     if (arg[0] == '\0') { terminal_writestring("Usage: cat <file>\n"); return; }
-    const char* content; size_t len;
-    enum fs_result r = fs_read(arg, &content, &len);
-    if (r != FS_OK) { print_fs_error(r); return; }
-    terminal_writestring(content);
-    terminal_putchar('\n');
+    vfs_cat_path(arg);
 }
 static void cmd_write(const char* args) {
     char name[FS_NAME_MAX]; const char* text;
     if (!split_name_and_rest(args, name, sizeof(name), &text)) {
         terminal_writestring("Usage: write <file> <text>\n"); return;
     }
-    enum fs_result r = fs_write(name, text);
+    enum fs_result r = vfs_write(name, text);
     if (r != FS_OK) print_fs_error(r);
 }
 static void cmd_append(const char* args) {
@@ -571,7 +622,7 @@ static void cmd_append(const char* args) {
     if (!split_name_and_rest(args, name, sizeof(name), &text)) {
         terminal_writestring("Usage: append <file> <text>\n"); return;
     }
-    enum fs_result r = fs_append(name, text);
+    enum fs_result r = vfs_append(name, text);
     if (r != FS_OK) print_fs_error(r);
 }
 static void cmd_cp(const char* args) {
@@ -820,7 +871,8 @@ void shell_execute_command(const char* line) {
     else if (str_equals(line, "echo")) terminal_putchar('\n');
     else if (str_starts_with(line, "calc ")) cmd_calc(line + 5);
     else if (str_equals(line, "calc")) cmd_calc("");
-    else if (str_equals(line, "ls")) fs_ls();
+    else if (str_equals(line, "ls")) vfs_ls_path("");
+    else if (str_starts_with(line, "ls ")) vfs_ls_path(line + 3);
     else if (str_equals(line, "pwd")) cmd_pwd();
     else if (str_starts_with(line, "cd ")) cmd_cd(line + 3);
     else if (str_equals(line, "cd")) cmd_cd("");
@@ -869,7 +921,8 @@ void shell_execute_command(const char* line) {
     else if (str_starts_with(line, "fatrm ")) cmd_fatrm(line + 6);
     else if (str_starts_with(line, "ping ")) cmd_ping(line + 5);
     else if (str_equals(line, "ping")) cmd_ping("");
-    else if (str_equals(line, "ifconfig") || str_equals(line, "netstat")) cmd_ifconfig();
+    else if (str_equals(line, "ifconfig") || str_equals(line, "netstat")) cmd_ifconfig("");
+    else if (str_starts_with(line, "ifconfig ")) cmd_ifconfig(line + 9);
     else if (str_starts_with(line, "dns ")) cmd_dns(line + 4);
     else if (str_equals(line, "dns")) cmd_dns("");
     else if (str_starts_with(line, "nslookup ")) cmd_dns(line + 9);
