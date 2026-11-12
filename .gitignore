@@ -33,5 +33,7 @@ Thumbs.db
 desktop.ini
 fat.img
 disk.img
+hdd.img
+*.img
 *.log
 *.raw

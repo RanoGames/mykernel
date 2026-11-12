@@ -58,8 +58,88 @@ def run_cmd(cmd, desc=None, cwd=None):
         print(f"ERROR: command failed with code {res.returncode}")
         sys.exit(res.returncode)
 
+HDD_IMG = ROOT_DIR / "hdd.img"
+
+def create_hdd(size_mb=128):
+    size_bytes = size_mb * 1024 * 1024
+    with open(HDD_IMG, "wb") as f:
+        f.write(b"\x00" * 65536)
+        f.truncate(size_bytes)
+    print(f"[HDD] Created raw hard drive image: {HDD_IMG.name} ({size_mb} MB / {size_bytes:,} bytes)")
+
+def delete_hdd():
+    if HDD_IMG.exists():
+        HDD_IMG.unlink()
+        print(f"[HDD] Deleted: {HDD_IMG.name}")
+    else:
+        print(f"[HDD] File {HDD_IMG.name} does not exist.")
+
+def clean_hdd(size_mb=128):
+    current_size = size_mb
+    if HDD_IMG.exists():
+        current_size = max(1, HDD_IMG.stat().st_size // (1024 * 1024))
+    size_bytes = current_size * 1024 * 1024
+    with open(HDD_IMG, "wb") as f:
+        f.write(b"\x00" * 65536)
+        f.truncate(size_bytes)
+    print(f"[HDD] Cleaned (zeroed) hard drive image: {HDD_IMG.name} ({current_size} MB)")
+
+def print_help():
+    print("""
+MyKernel Build Script:
+  python build.py               - Build userland and kernel (default)
+  python build.py disk          - Build kernel, bootloader and disk.img
+  python build.py clean         - Remove build directory
+  python build.py createhdd [MB]- Create virtual hard drive hdd.img (default 128 MB)
+  python build.py deletehdd     - Delete hdd.img (also: 'delete hdd')
+  python build.py cleanhdd      - Clean (zero-out) hdd.img (also: 'clean hdd')
+  python build.py run           - Run live kernel in QEMU
+  python build.py run-hdd       - Run live kernel in QEMU with hdd.img as primary ATA drive
+  python build.py run-disk      - Run disk.img in QEMU
+  python build.py run-disk-hdd  - Run disk.img in QEMU with hdd.img as secondary drive
+  python build.py boot-hdd      - Boot directly from installed hdd.img
+""")
+
 def main():
-    action = sys.argv[1] if len(sys.argv) > 1 else "all"
+    if len(sys.argv) > 1:
+        action = sys.argv[1].lower()
+    else:
+        action = "all"
+
+    # Support multi-word commands: 'delete hdd', 'create hdd', 'clean hdd'
+    if len(sys.argv) > 2 and sys.argv[2].lower() == "hdd":
+        if action == "delete":
+            action = "deletehdd"
+        elif action == "create":
+            action = "createhdd"
+        elif action == "clean":
+            action = "cleanhdd"
+
+    if action in ("help", "--help", "-h"):
+        print_help()
+        return
+
+    if action in ("createhdd", "create-hdd", "create_hdd"):
+        size_mb = 128
+        for arg in sys.argv[2:]:
+            if arg.isdigit():
+                size_mb = int(arg)
+                break
+        create_hdd(size_mb)
+        return
+
+    if action in ("deletehdd", "delete-hdd", "delete_hdd"):
+        delete_hdd()
+        return
+
+    if action in ("cleanhdd", "clean-hdd", "clean_hdd"):
+        size_mb = 128
+        for arg in sys.argv[2:]:
+            if arg.isdigit():
+                size_mb = int(arg)
+                break
+        clean_hdd(size_mb)
+        return
 
     if action == "clean":
         if BUILD_DIR.exists():
@@ -225,10 +305,45 @@ def main():
         run_cmd([sys.executable, str(BOOT_DIR / "mkdisk.py"), str(kernel_bin), str(mbr_bin), str(stage2_bin), str(disk_img), str(raw_bin)], "MKDISK disk.img")
 
     # 6. Run if requested
-    if action in ("run", "run-disk"):
+    run_actions = (
+        "run", "run-disk", "run-hdd", "runhdd", "run_hdd",
+        "run-with-hdd", "run-disk-hdd", "boot-hdd", "run-installed"
+    )
+    if action in run_actions or any(arg in ("--hdd", "+hdd", "-hdd") for arg in sys.argv):
         qemu = find_qemu()
         print(f"\n--- Launching QEMU ({qemu}) ---")
-        if action == "run-disk":
+        has_hdd_flag = any(arg in ("--hdd", "+hdd", "-hdd") for arg in sys.argv)
+
+        if action in ("boot-hdd", "run-installed"):
+            if not HDD_IMG.exists():
+                print(f"[ERROR] Cannot boot from {HDD_IMG.name}: file does not exist. Run 'install' first.")
+                sys.exit(1)
+            qemu_cmd = [
+                qemu, "-hda", str(HDD_IMG), "-m", "128",
+                "-vga", "std", "-global", "VGA.vgamem_mb=32", "-net", "nic,model=rtl8139", "-net", "user",
+                "-audiodev", "dsound,id=spk", "-machine", "pcspk-audiodev=spk"
+            ]
+        elif action in ("run-disk-hdd",) or (action == "run-disk" and has_hdd_flag):
+            disk_img = ROOT_DIR / "disk.img"
+            if not HDD_IMG.exists():
+                print(f"[HDD] {HDD_IMG.name} not found. Auto-creating 128 MB raw image...")
+                create_hdd(128)
+            qemu_cmd = [
+                qemu, "-hda", str(disk_img), "-hdb", str(HDD_IMG), "-m", "128",
+                "-vga", "std", "-global", "VGA.vgamem_mb=32", "-net", "nic,model=rtl8139", "-net", "user",
+                "-audiodev", "dsound,id=spk", "-machine", "pcspk-audiodev=spk"
+            ]
+        elif action in ("run-hdd", "runhdd", "run_hdd", "run-with-hdd") or (action == "run" and has_hdd_flag):
+            if not HDD_IMG.exists():
+                print(f"[HDD] {HDD_IMG.name} not found. Auto-creating 128 MB raw image...")
+                create_hdd(128)
+            qemu_cmd = [
+                qemu, "-kernel", str(kernel_bin), "-m", "128",
+                "-hda", str(HDD_IMG),
+                "-vga", "std", "-global", "VGA.vgamem_mb=32", "-net", "nic,model=rtl8139", "-net", "user",
+                "-audiodev", "dsound,id=spk", "-machine", "pcspk-audiodev=spk"
+            ]
+        elif action == "run-disk":
             disk_img = ROOT_DIR / "disk.img"
             qemu_cmd = [
                 qemu, "-hda", str(disk_img), "-m", "128",
