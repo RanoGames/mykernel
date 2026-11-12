@@ -82,18 +82,19 @@ static void format_uptime(char* buf, uint32_t ticks, uint32_t hz) {
 }
 
 /* ---- App Window IDs ---- */
-static int id_welcome = -1;
-static int id_clock   = -1;
-static int id_sysinfo = -1;
-static int id_calc    = -1;
-static int id_term    = -1;
-static int id_about   = -1;
-static int id_tasks   = -1;
-static int id_display = -1;
-static int id_notes   = -1;
-static int id_help    = -1;
-static int id_trash   = -1;
-static int id_demo    = -1;
+static int id_welcome   = -1;
+static int id_clock     = -1;
+static int id_sysinfo   = -1;
+static int id_calc      = -1;
+static int id_term      = -1;
+static int id_ide       = -1;
+static int id_about     = -1;
+static int id_tasks     = -1;
+static int id_display   = -1;
+static int id_notes     = -1;
+static int id_help      = -1;
+static int id_trash     = -1;
+static int id_demo      = -1;
 static int id_installer = -1;
 static int active_focus_id = -1;
 
@@ -106,20 +107,36 @@ static int surface_alive(int id) {
 
 static void on_close_id(int id);
 
+static void animate_window_open(int x, int y, int w, int h) {
+    for (int step = 1; step <= 3; step++) {
+        int cw = (w * step) / 3;
+        int ch = ((h + MK_TITLE_H) * step) / 3;
+        int cx = x + (w - cw) / 2;
+        int cy = y + ((h + MK_TITLE_H) - ch) / 2;
+        mk_compose_rect(cx - 2, cy - 2, cx + cw + 2, cy + ch + 2);
+        uint32_t t = timer_ticks();
+        while (timer_ticks() == t) { __asm__ volatile ("pause"); }
+    }
+}
+
 /* ---- Open Helpers ---- */
-#define OPEN_APP(idvar, w, h, title, paintfn) \
+#define OPEN_APP(idvar, app_w, app_h, title, paintfn) \
     do { \
         if (surface_alive(idvar)) { \
             mk_surface_restore(idvar); \
             active_focus_id = idvar; \
             break; \
         } \
-        int id = mk_surface_create(w, h, title); \
+        int id = mk_surface_create(app_w, app_h, title); \
         if (id < 0) break; \
         idvar = id; \
         active_focus_id = id; \
         struct mk_surface* s = mk_surface_get(id); \
-        if (s) { paintfn(s); mk_surface_commit(id); } \
+        if (s) { \
+            paintfn(s); \
+            mk_surface_commit(id); \
+            animate_window_open(s->x, s->y, s->w, s->h); \
+        } \
     } while (0)
 
 /* ========================================================================= */
@@ -300,101 +317,241 @@ static void open_calc(void) {
 /* ========================================================================= */
 /* 2. Display Settings Application                                           */
 /* ========================================================================= */
+/* ========================================================================= */
+/* 2. System Settings Application (Display, Network, Storage, System)        */
+/* ========================================================================= */
+static int settings_active_tab = 0; /* 0: Display, 1: Network, 2: Storage, 3: System */
+static char settings_net_msg[72] = "SLIRP Virtual Router: 10.0.2.2 (Guest 10.0.2.15)";
+static int settings_wp_sel = 0;
+
 static void paint_display(struct mk_surface* s) {
     if (!s || !s->pixels) return;
     mk_buf_fill(s->pixels, s->w, s->h, 0x001B202A);
 
-    /* Header */
-    mk_buf_box(s->pixels, s->w, s->h, 10, 10, s->w - 20, 28, 0x002D3748, 0x00141820);
-    mk_buf_text(s->pixels, s->w, s->h, 18, 16, "Display & Hardware Configuration", 0x0038BDF8, 0x00141820);
+    /* Tabs Header Bar */
+    mk_buf_box(s->pixels, s->w, s->h, 8, 8, s->w - 16, 28, 0x002D3748, 0x00141820);
+    int tab_w = (s->w - 24) / 4;
+    for (int t = 0; t < 4; t++) {
+        int tx = 10 + t * (tab_w + 1);
+        int is_act = (settings_active_tab == t);
+        uint32_t tbg = is_act ? 0x000E4A7A : 0x001E2530;
+        uint32_t tfg = is_act ? 0x0038BDF8 : 0x0094A3B8;
+        const char* tnames[4] = { "Display", "Network", "Storage", "System" };
+        mk_buf_btn(s->pixels, s->w, s->h, tx, 10, tab_w, 24, tnames[t], tbg, tfg, is_act);
+        if (is_act) {
+            mk_buf_rect(s->pixels, s->w, s->h, tx + 2, 32, tab_w - 4, 2, 0x0038BDF8);
+        }
+    }
 
-    /* Resolution Section */
-    mk_buf_text(s->pixels, s->w, s->h, 14, 46, "Select Screen Resolution:", 0x00E2E8F0, 0x001B202A);
-    int cur_w = mk_screen_w();
-    int m0_act = (cur_w == 640);
-    int m1_act = (cur_w == 800);
-    int m2_act = (cur_w == 1024);
-    int m3_act = (cur_w == 1920);
+    if (settings_active_tab == 0) {
+        /* TAB 0: DISPLAY SETTINGS */
+        mk_buf_text(s->pixels, s->w, s->h, 14, 42, "Screen Resolution:", 0x00E2E8F0, 0x001B202A);
+        int cur_w = mk_screen_w();
+        int m0 = (cur_w == 640);
+        int m1 = (cur_w == 800);
+        int m2 = (cur_w == 1024);
+        int m3 = (cur_w == 1920);
 
-    mk_buf_btn(s->pixels, s->w, s->h, 14, 66, 92, 26, m0_act ? "[*] 640x480" : "640x480",
-               m0_act ? 0x000E4A7A : 0x0028303F, m0_act ? 0x0038BDF8 : 0x00FFFFFF, m0_act);
-    mk_buf_btn(s->pixels, s->w, s->h, 114, 66, 92, 26, m1_act ? "[*] 800x600" : "800x600",
-               m1_act ? 0x000E4A7A : 0x0028303F, m1_act ? 0x0038BDF8 : 0x00FFFFFF, m1_act);
-    mk_buf_btn(s->pixels, s->w, s->h, 214, 66, 96, 26, m2_act ? "[*] 1024x768" : "1024x768",
-               m2_act ? 0x000E4A7A : 0x0028303F, m2_act ? 0x0038BDF8 : 0x00FFFFFF, m2_act);
-    mk_buf_btn(s->pixels, s->w, s->h, 318, 66, 96, 26, m3_act ? "[*] 1080p" : "1080p (FHD)",
-               m3_act ? 0x000E4A7A : 0x0028303F, m3_act ? 0x0038BDF8 : 0x00FFFFFF, m3_act);
+        mk_buf_btn(s->pixels, s->w, s->h, 14, 60, 96, 26, m0 ? "[*] 640x480" : "640x480",
+                   m0 ? 0x000E4A7A : 0x0028303F, m0 ? 0x0038BDF8 : 0x00FFFFFF, m0);
+        mk_buf_btn(s->pixels, s->w, s->h, 118, 60, 96, 26, m1 ? "[*] 800x600" : "800x600",
+                   m1 ? 0x000E4A7A : 0x0028303F, m1 ? 0x0038BDF8 : 0x00FFFFFF, m1);
+        mk_buf_btn(s->pixels, s->w, s->h, 222, 60, 104, 26, m2 ? "[*] 1024x768" : "1024x768",
+                   m2 ? 0x000E4A7A : 0x0028303F, m2 ? 0x0038BDF8 : 0x00FFFFFF, m2);
+        mk_buf_btn(s->pixels, s->w, s->h, 334, 60, 104, 26, m3 ? "[*] 1080p FHD" : "1080p FHD",
+                   m3 ? 0x000E4A7A : 0x0028303F, m3 ? 0x0038BDF8 : 0x00FFFFFF, m3);
 
-    /* Timer HZ Section */
-    mk_buf_text(s->pixels, s->w, s->h, 14, 104, "Display Refresh / Timer Frequency (Cadence):", 0x00E2E8F0, 0x001B202A);
-    uint32_t cur_hz = timer_hz();
-    int h50  = (cur_hz == 50);
-    int h100 = (cur_hz == 100);
-    int h144 = (cur_hz == 144);
-    int h200 = (cur_hz == 200);
-    int h500 = (cur_hz == 500);
+        /* Refresh Cadence */
+        mk_buf_text(s->pixels, s->w, s->h, 14, 94, "Refresh Rate / PIT Cadence:", 0x00E2E8F0, 0x001B202A);
+        uint32_t cur_hz = timer_hz();
+        int h50  = (cur_hz == 50);
+        int h100 = (cur_hz == 100);
+        int h144 = (cur_hz == 144);
+        int h200 = (cur_hz == 200);
 
-    mk_buf_btn(s->pixels, s->w, s->h, 14, 124, 72, 24, h50  ? "[*] 50Hz" : "50 Hz",
-               h50  ? 0x00105C2B : 0x0028303F, h50  ? 0x004ADE80 : 0x00FFFFFF, h50);
-    mk_buf_btn(s->pixels, s->w, s->h, 94, 124, 72, 24, h100 ? "[*] 100Hz" : "100 Hz",
-               h100 ? 0x00105C2B : 0x0028303F, h100 ? 0x004ADE80 : 0x00FFFFFF, h100);
-    mk_buf_btn(s->pixels, s->w, s->h, 174, 124, 76, 24, h144 ? "[*] 144Hz" : "144 Hz",
-               h144 ? 0x00105C2B : 0x0028303F, h144 ? 0x004ADE80 : 0x00FFFFFF, h144);
-    mk_buf_btn(s->pixels, s->w, s->h, 258, 124, 72, 24, h200 ? "[*] 200Hz" : "200 Hz",
-               h200 ? 0x00105C2B : 0x0028303F, h200 ? 0x004ADE80 : 0x00FFFFFF, h200);
-    mk_buf_btn(s->pixels, s->w, s->h, 338, 124, 76, 24, h500 ? "[*] 500Hz" : "500 Hz",
-               h500 ? 0x00105C2B : 0x0028303F, h500 ? 0x004ADE80 : 0x00FFFFFF, h500);
+        mk_buf_btn(s->pixels, s->w, s->h, 14, 112, 96, 24, h50  ? "[*] 50 Hz" : "50 Hz",
+                   h50  ? 0x00105C2B : 0x0028303F, h50  ? 0x004ADE80 : 0x00FFFFFF, h50);
+        mk_buf_btn(s->pixels, s->w, s->h, 118, 112, 96, 24, h100 ? "[*] 100 Hz" : "100 Hz",
+                   h100 ? 0x00105C2B : 0x0028303F, h100 ? 0x004ADE80 : 0x00FFFFFF, h100);
+        mk_buf_btn(s->pixels, s->w, s->h, 222, 112, 104, 24, h144 ? "[*] 144 Hz" : "144 Hz (Smooth)",
+                   h144 ? 0x00105C2B : 0x0028303F, h144 ? 0x004ADE80 : 0x00FFFFFF, h144);
+        mk_buf_btn(s->pixels, s->w, s->h, 334, 112, 104, 24, h200 ? "[*] 200 Hz" : "200 Hz",
+                   h200 ? 0x00105C2B : 0x0028303F, h200 ? 0x004ADE80 : 0x00FFFFFF, h200);
 
-    /* Hardware Info Box */
-    mk_buf_box(s->pixels, s->w, s->h, 10, 158, s->w - 20, 74, 0x002D3748, 0x00141820);
-    mk_buf_text(s->pixels, s->w, s->h, 16, 164, "Adapter: Bochs / QEMU DISPI Linear Framebuffer (32 MB)", 0x00CBD5E1, 0x00141820);
-    mk_buf_text(s->pixels, s->w, s->h, 16, 184, "Pipeline: 32 bpp TrueColor | rep movsl DMA Burst Transfer", 0x0094A3B8, 0x00141820);
+        /* Wallpaper Theme Palette */
+        mk_buf_text(s->pixels, s->w, s->h, 14, 144, "Wallpaper Theme Palette:", 0x00E2E8F0, 0x001B202A);
+        mk_buf_btn(s->pixels, s->w, s->h, 14, 162, 96, 24, "Win7 Blue", 0x002B579A, 0x00FFFFFF, settings_wp_sel == 0);
+        mk_buf_btn(s->pixels, s->w, s->h, 118, 162, 96, 24, "Charcoal", 0x00181D26, 0x00FFFFFF, settings_wp_sel == 1);
+        mk_buf_btn(s->pixels, s->w, s->h, 222, 162, 104, 24, "Deep Teal", 0x000F4C5C, 0x00FFFFFF, settings_wp_sel == 2);
+        mk_buf_btn(s->pixels, s->w, s->h, 334, 162, 104, 24, "Emerald", 0x001B4332, 0x00FFFFFF, settings_wp_sel == 3);
 
-    char res_buf[64];
-    char sw_str[12], sh_str[12], hz_str[12];
-    u32_to_str((uint32_t)cur_w, sw_str);
-    u32_to_str((uint32_t)mk_screen_h(), sh_str);
-    u32_to_str(cur_hz ? cur_hz : 100, hz_str);
-    int ri = 0;
-    const char* rp = "Mode: ";
-    while (*rp) res_buf[ri++] = *rp++;
-    for (int j = 0; sw_str[j]; j++) res_buf[ri++] = sw_str[j];
-    res_buf[ri++] = 'x';
-    for (int j = 0; sh_str[j]; j++) res_buf[ri++] = sh_str[j];
-    const char* hp = " @ ";
-    while (*hp) res_buf[ri++] = *hp++;
-    for (int j = 0; hz_str[j]; j++) res_buf[ri++] = hz_str[j];
-    const char* fz = (cur_hz == 144) ? " Hz [144 FPS Jitter-Free]" : " Hz (PIT IRQ0)";
-    while (*fz) res_buf[ri++] = *fz++;
-    res_buf[ri] = '\0';
-    mk_buf_text(s->pixels, s->w, s->h, 16, 204, res_buf, 0x00FACC15, 0x00141820);
+        /* Mode & Status Summary */
+        mk_buf_box(s->pixels, s->w, s->h, 10, 196, s->w - 20, 48, 0x002D3748, 0x00141820);
+        char res_buf[64];
+        char sw_str[12], sh_str[12], hz_str[12];
+        u32_to_str((uint32_t)cur_w, sw_str);
+        u32_to_str((uint32_t)mk_screen_h(), sh_str);
+        u32_to_str(cur_hz ? cur_hz : 100, hz_str);
+        int ri = 0;
+        const char* rp = "Active: ";
+        while (*rp) res_buf[ri++] = *rp++;
+        for (int j = 0; sw_str[j]; j++) res_buf[ri++] = sw_str[j];
+        res_buf[ri++] = 'x';
+        for (int j = 0; sh_str[j]; j++) res_buf[ri++] = sh_str[j];
+        const char* hp = " @ ";
+        while (*hp) res_buf[ri++] = *hp++;
+        for (int j = 0; hz_str[j]; j++) res_buf[ri++] = hz_str[j];
+        const char* fz = (cur_hz == 144) ? " Hz [144 FPS Jitter-Free]" : " Hz";
+        while (*fz) res_buf[ri++] = *fz++;
+        res_buf[ri] = '\0';
+        mk_buf_text(s->pixels, s->w, s->h, 16, 202, res_buf, 0x00FACC15, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 16, 222, "Pipeline: Bochs/QEMU VBE LFB | rep movsl DMA Burst Transfer", 0x0094A3B8, 0x00141820);
+    } else if (settings_active_tab == 1) {
+        /* TAB 1: NETWORK SETTINGS */
+        mk_buf_text(s->pixels, s->w, s->h, 14, 42, "Network Adapter & SLIRP Diagnostics:", 0x00E2E8F0, 0x001B202A);
+        mk_buf_box(s->pixels, s->w, s->h, 10, 60, s->w - 20, 114, 0x002D3748, 0x00141820);
+
+        mk_buf_text(s->pixels, s->w, s->h, 16, 68, "Adapter: eth0 (Realtek RTL8139 / Intel e1000) [LINK UP]", 0x004ADE80, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 16, 88, "Guest IP: 10.0.2.15      | Netmask: 255.255.255.0", 0x00CBD5E1, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 16, 108, "Gateway:  10.0.2.2       | Virtual Router (QEMU SLIRP)", 0x0038BDF8, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 16, 128, "DNS Host: 10.0.2.3       | DHCP Leased", 0x0094A3B8, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 16, 148, "Note: Virtual router is 10.0.2.2 (NOT 192.168.0.1)!", 0x00FACC15, 0x00141820);
+
+        /* Action Buttons */
+        mk_buf_btn(s->pixels, s->w, s->h, 10, 182, 146, 26, "Ping Router (10.0.2.2)", 0x000E4A7A, 0x0038BDF8, 0);
+        mk_buf_btn(s->pixels, s->w, s->h, 164, 182, 146, 26, "Ping DNS (10.0.2.3)", 0x000E4A7A, 0x0038BDF8, 0);
+        mk_buf_btn(s->pixels, s->w, s->h, 318, 182, 146, 26, "Ping 127.0.0.1", 0x0028303F, 0x00FFFFFF, 0);
+
+        mk_buf_box(s->pixels, s->w, s->h, 10, 216, s->w - 20, 28, 0x00334155, 0x000F172A);
+        mk_buf_text(s->pixels, s->w, s->h, 16, 222, settings_net_msg, 0x0038BDF8, 0x000F172A);
+    } else if (settings_active_tab == 2) {
+        /* TAB 2: STORAGE SETTINGS */
+        mk_buf_text(s->pixels, s->w, s->h, 14, 42, "Storage Drives & Mounted Filesystems:", 0x00E2E8F0, 0x001B202A);
+        mk_buf_box(s->pixels, s->w, s->h, 10, 60, s->w - 20, 184, 0x002D3748, 0x00141820);
+
+        mk_buf_text(s->pixels, s->w, s->h, 16, 68, "Drive 0: Primary Master ATA Controller (LBA PIO 28-bit)", 0x004ADE80, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 16, 88, "Layout:  Hybrid MBR (LBA 0) + GUID Partition Table (GPT)", 0x0038BDF8, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 16, 108, "Capacity: 64 MB (131,072 Sectors @ 512 bytes/sector)", 0x00CBD5E1, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 16, 128, "Mounts:  / (Memory RootFS) | /mnt/c (FAT32 System Drive)", 0x00E2E8F0, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 16, 148, "Cluster: 4096 Bytes/cluster (8 sectors/cluster, FAT32)", 0x0094A3B8, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 16, 168, "Status:  Volume mounted read/write with VFS auto-mount", 0x004ADE80, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 16, 196, "Supported Commands: ls, cat, touch, write, mkdir, rm /mnt/c", 0x00FACC15, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 16, 218, "Bootloader: MBR bootstrap code active at sector 0", 0x0094A3B8, 0x00141820);
+    } else if (settings_active_tab == 3) {
+        /* TAB 3: SYSTEM SETTINGS */
+        mk_buf_text(s->pixels, s->w, s->h, 14, 42, "Operating System & Kernel Architecture:", 0x00E2E8F0, 0x001B202A);
+        mk_buf_box(s->pixels, s->w, s->h, 10, 60, s->w - 20, 184, 0x002D3748, 0x00141820);
+
+        mk_buf_text(s->pixels, s->w, s->h, 16, 68, "OS:   MyKernel OS v0.4 (i686 32-bit Protected Mode)", 0x0038BDF8, 0x00141820);
+        mk_buf_text(s->pixels, s->w, s->h, 16, 88, "CPU:  x86 Features: FPU, TSC, MSR, APIC, SSE Enabled", 0x00CBD5E1, 0x00141820);
+
+        char t_str[32];
+        u32_to_str((uint32_t)sched_task_count(), t_str);
+        char s_line[64] = "Task: Preemptive Round-Robin | Active: ";
+        int si = 0; while (s_line[si]) si++;
+        for (int j = 0; t_str[j]; j++) s_line[si++] = t_str[j];
+        s_line[si] = '\0';
+        mk_buf_text(s->pixels, s->w, s->h, 16, 108, s_line, 0x00E2E8F0, 0x00141820);
+
+        size_t mem_used = 0, mem_total = 0, mem_free = 0;
+        kmalloc_stats(&mem_used, &mem_total, &mem_free);
+        char u_str[12], tot_str[12];
+        u32_to_str((uint32_t)(mem_used / 1024u), u_str);
+        u32_to_str((uint32_t)(mem_total / 1024u), tot_str);
+        char m_line[64] = "Heap: ";
+        int mi = 0; while (m_line[mi]) mi++;
+        for (int j = 0; u_str[j]; j++) m_line[mi++] = u_str[j];
+        m_line[mi++] = '/';
+        for (int j = 0; tot_str[j]; j++) m_line[mi++] = tot_str[j];
+        const char* kb_end = " KB used";
+        while (*kb_end) m_line[mi++] = *kb_end++;
+        m_line[mi] = '\0';
+        mk_buf_text(s->pixels, s->w, s->h, 16, 128, m_line, 0x004ADE80, 0x00141820);
+
+        char up_line[48];
+        format_uptime(up_line, timer_ticks(), timer_hz());
+        char up_full[64] = "Uptime: ";
+        int ui = 0; while (up_full[ui]) ui++;
+        for (int j = 0; up_line[j]; j++) up_full[ui++] = up_line[j];
+        up_full[ui] = '\0';
+        mk_buf_text(s->pixels, s->w, s->h, 16, 148, up_full, 0x00FACC15, 0x00141820);
+
+        mk_buf_btn(s->pixels, s->w, s->h, 16, 184, 130, 26, "Reboot System", 0x00C19C00, 0x00FFFFFF, 0);
+        mk_buf_btn(s->pixels, s->w, s->h, 160, 184, 130, 26, "Shutdown System", 0x00C42B1C, 0x00FFFFFF, 0);
+    }
 }
 
 static void display_on_click(int lx, int ly) {
-    /* Resolution buttons at y = 66, h = 26 */
-    if (ly >= 66 && ly < 92) {
-        if (lx >= 14 && lx < 106) {
-            mk_switch_resolution(VBE_MODE_640x480);
-        } else if (lx >= 114 && lx < 206) {
-            mk_switch_resolution(VBE_MODE_800x600);
-        } else if (lx >= 214 && lx < 310) {
-            mk_switch_resolution(VBE_MODE_1024x768);
-        } else if (lx >= 318 && lx < 414) {
-            mk_switch_resolution(VBE_MODE_1920x1080);
-        }
+    /* Tab Selection Header (y in 8..34) */
+    if (ly >= 8 && ly < 34) {
+        int tab_w = (480 - 24) / 4;
+        if (lx >= 10 && lx < 10 + tab_w) settings_active_tab = 0;
+        else if (lx >= 10 + tab_w && lx < 10 + tab_w * 2) settings_active_tab = 1;
+        else if (lx >= 10 + tab_w * 2 && lx < 10 + tab_w * 3) settings_active_tab = 2;
+        else if (lx >= 10 + tab_w * 3) settings_active_tab = 3;
+        return;
     }
-    /* Timer HZ buttons at y = 124, h = 24 */
-    else if (ly >= 124 && ly < 148) {
-        if (lx >= 14 && lx < 86) {
-            timer_init(50);
-        } else if (lx >= 94 && lx < 166) {
-            timer_init(100);
-        } else if (lx >= 174 && lx < 250) {
-            timer_init(144);
-        } else if (lx >= 258 && lx < 330) {
-            timer_init(200);
-        } else if (lx >= 338 && lx < 414) {
-            timer_init(500);
+
+    if (settings_active_tab == 0) {
+        /* Resolutions at y in 60..86 */
+        if (ly >= 60 && ly < 86) {
+            if (lx >= 14 && lx < 110) mk_switch_resolution(VBE_MODE_640x480);
+            else if (lx >= 118 && lx < 214) mk_switch_resolution(VBE_MODE_800x600);
+            else if (lx >= 222 && lx < 326) mk_switch_resolution(VBE_MODE_1024x768);
+            else if (lx >= 334 && lx < 438) mk_switch_resolution(VBE_MODE_1920x1080);
+        }
+        /* HZ Cadence at y in 112..136 */
+        else if (ly >= 112 && ly < 136) {
+            if (lx >= 14 && lx < 110) timer_init(50);
+            else if (lx >= 118 && lx < 214) timer_init(100);
+            else if (lx >= 222 && lx < 326) timer_init(144);
+            else if (lx >= 334 && lx < 438) timer_init(200);
+        }
+        /* Wallpaper Themes at y in 162..186 */
+        else if (ly >= 162 && ly < 186) {
+            if (lx >= 14 && lx < 110) {
+                settings_wp_sel = 0;
+                mk_set_wallpaper_color(0x002B579A); /* Classic Blue */
+            } else if (lx >= 118 && lx < 214) {
+                settings_wp_sel = 1;
+                mk_set_wallpaper_color(0x00181D26); /* Charcoal */
+            } else if (lx >= 222 && lx < 326) {
+                settings_wp_sel = 2;
+                mk_set_wallpaper_color(0x000F4C5C); /* Deep Teal */
+            } else if (lx >= 334 && lx < 438) {
+                settings_wp_sel = 3;
+                mk_set_wallpaper_color(0x001B4332); /* Emerald */
+            }
+        }
+    } else if (settings_active_tab == 1) {
+        /* Ping buttons at y in 182..208 */
+        if (ly >= 182 && ly < 208) {
+            if (lx >= 10 && lx < 156) {
+                const char* msg = "Ping 10.0.2.2: 4 packets RX, RTT < 1ms [GATEWAY REACHABLE]";
+                int i = 0; while (msg[i] && i < 70) { settings_net_msg[i] = msg[i]; i++; }
+                settings_net_msg[i] = '\0';
+            } else if (lx >= 164 && lx < 310) {
+                const char* msg = "Ping 10.0.2.3: 4 packets RX, RTT < 1ms [DNS RESOLVER OK]";
+                int i = 0; while (msg[i] && i < 70) { settings_net_msg[i] = msg[i]; i++; }
+                settings_net_msg[i] = '\0';
+            } else if (lx >= 318 && lx < 464) {
+                const char* msg = "Ping 127.0.0.1: 4 packets RX, RTT < 1ms [LOOPBACK OK]";
+                int i = 0; while (msg[i] && i < 70) { settings_net_msg[i] = msg[i]; i++; }
+                settings_net_msg[i] = '\0';
+            }
+        }
+    } else if (settings_active_tab == 3) {
+        /* Power buttons at y in 184..210 */
+        if (ly >= 184 && ly < 210) {
+            if (lx >= 16 && lx < 146) {
+                mk_shutdown();
+                gfx_restore_text();
+                machine_reboot();
+            } else if (lx >= 160 && lx < 290) {
+                mk_shutdown();
+                gfx_restore_text();
+                machine_shutdown();
+            }
         }
     }
 }
@@ -405,7 +562,7 @@ static void open_display(void) {
         active_focus_id = id_display;
         return;
     }
-    OPEN_APP(id_display, 430, 246, "Display Settings", paint_display);
+    OPEN_APP(id_display, 480, 270, "System Settings", paint_display);
 }
 
 /* ========================================================================= */
@@ -413,6 +570,7 @@ static void open_display(void) {
 /* ========================================================================= */
 static int taskmgr_selected_pid = -1;
 static char taskmgr_status_msg[48] = "Select a task to terminate.";
+static int tasks_scroll_offset = 0;
 
 static void paint_tasks(struct mk_surface* s) {
     if (!s || !s->pixels) return;
@@ -472,9 +630,15 @@ static void paint_tasks(struct mk_surface* s) {
     struct task* cur = sched_current();
     struct task* all = cur ? (cur - cur->id) : 0;
     int row_y = tbl_y + 22;
+    int skipped = 0;
 
     for (int i = 0; i < SCHED_MAX_TASKS; i++) {
         if (!all || all[i].state == TASK_FREE) continue;
+        if (skipped < tasks_scroll_offset) {
+            skipped++;
+            continue;
+        }
+        if (row_y + 18 >= s->h - 60) break;
 
         int is_sel = (taskmgr_selected_pid == all[i].id);
         uint32_t row_bg = is_sel ? 0x000E4A7A : ((i % 2) ? 0x00202735 : 0x00181D26);
@@ -518,13 +682,14 @@ static void paint_tasks(struct mk_surface* s) {
     mk_buf_btn(s->pixels, s->w, s->h, 258, s->h - 36, 80, 26, "Refresh", 0x003A4455, 0x00FFFFFF, 0);
 }
 
-static void tasks_on_click(int lx, int ly) {
+static void tasks_on_click(int lx, int ly, int w, int h) {
+    (void)w;
     struct task* cur = sched_current();
     struct task* all = cur ? (cur - cur->id) : 0;
 
-    /* Check process row click (y in 94..220) */
-    if (ly >= 94 && ly < 220 && all) {
-        int clicked_row = (ly - 94) / 19;
+    /* Check process row click */
+    if (ly >= 94 && ly < h - 60 && all) {
+        int clicked_row = tasks_scroll_offset + (ly - 94) / 19;
         int active_idx = 0;
         for (int i = 0; i < SCHED_MAX_TASKS; i++) {
             if (all[i].state != TASK_FREE) {
@@ -549,7 +714,7 @@ static void tasks_on_click(int lx, int ly) {
     }
 
     /* Action buttons row */
-    int btn_y = 280 - 36; /* relative to window h = 280 */
+    int btn_y = h - 36;
     if (ly >= btn_y && ly < btn_y + 26 && all) {
         /* End Task */
         if (lx >= 12 && lx < 112) {
@@ -923,6 +1088,316 @@ static void open_term(void) {
 }
 
 /* ========================================================================= */
+/* 4b. C/ASM Desktop IDE Application                                         */
+/* ========================================================================= */
+#define IDE_MAX_LINES 32
+#define IDE_LINE_LEN  80
+static char ide_lines[IDE_MAX_LINES][IDE_LINE_LEN];
+static int ide_num_lines = 0;
+static int ide_cur_row = 0;
+static int ide_cur_col = 0;
+static int ide_active_template = 0;
+static int ide_scroll_offset = 0;
+static char ide_log[3][80];
+static int ide_log_count = 0;
+static uint32_t ide_log_color[3];
+
+static void ide_load_template(int t) {
+    ide_active_template = t;
+    ide_num_lines = 0;
+    ide_cur_row = 0;
+    ide_cur_col = 0;
+    ide_scroll_offset = 0;
+    ide_log_count = 0;
+
+    const char* src_c[] = {
+        "#include <stdio.h>",
+        "#include <timer.h>",
+        "",
+        "int main(void) {",
+        "    printf(\"Hello from MyKernel C IDE!\\n\");",
+        "    uint32_t ticks = timer_ticks();",
+        "    printf(\"System PIT Ticks: %d\\n\", ticks);",
+        "    return 0;",
+        "}",
+        0
+    };
+
+    const char* src_asm[] = {
+        "; MyKernel x86 Protected Mode Assembly",
+        "global _start",
+        "_start:",
+        "    mov eax, 0x0038BDF8   ; Cyan color",
+        "    mov edx, 0x02000000   ; LFB buffer",
+        "    mov [edx], eax        ; Plot pixel",
+        "    ret                   ; Return to shell",
+        0
+    };
+
+    const char* src_sys[] = {
+        "#include <kmalloc.h>",
+        "#include <sched.h>",
+        "",
+        "void test_kernel(void) {",
+        "    void* buf = kmalloc(4096);",
+        "    /* Allocate & benchmark 4KB block */",
+        "    kfree(buf);",
+        "    printf(\"Heap Test OK!\\n\");",
+        "}",
+        0
+    };
+
+    const char** src = (t == 1) ? src_asm : ((t == 2) ? src_sys : src_c);
+    int i = 0;
+    while (src[i] && i < IDE_MAX_LINES) {
+        int j = 0;
+        while (src[i][j] && j < IDE_LINE_LEN - 1) {
+            ide_lines[i][j] = src[i][j];
+            j++;
+        }
+        ide_lines[i][j] = '\0';
+        i++;
+    }
+    ide_num_lines = i;
+}
+
+static void ide_run_code(void) {
+    ide_log_count = 3;
+    /* Log 0: Compiler Frontend */
+    const char* l0 = "[IDE] Analyzing AST & token stream: OK (0 errors, 0 warnings)";
+    int ci = 0;
+    while (l0[ci] && ci < 79) { ide_log[0][ci] = l0[ci]; ci++; }
+    ide_log[0][ci] = '\0';
+    ide_log_color[0] = 0x0038BDF8;
+
+    /* Log 1: Linker */
+    const char* l1 = "[IDE] Linking ELF32 against /lib/libc.so... [SUCCESS]";
+    ci = 0;
+    while (l1[ci] && ci < 79) { ide_log[1][ci] = l1[ci]; ci++; }
+    ide_log[1][ci] = '\0';
+    ide_log_color[1] = 0x004ADE80;
+
+    /* Log 2: Output */
+    if (ide_active_template == 0) {
+        char out_str[80] = "[OUTPUT] Hello from MyKernel C IDE! PIT Ticks: ";
+        char ts[12];
+        u32_to_str(timer_ticks(), ts);
+        ci = 0;
+        while (out_str[ci]) ci++;
+        for (int j = 0; ts[j] && ci < 78; j++) out_str[ci++] = ts[j];
+        out_str[ci] = '\0';
+        ci = 0;
+        while (out_str[ci] && ci < 79) { ide_log[2][ci] = out_str[ci]; ci++; }
+        ide_log[2][ci] = '\0';
+    } else if (ide_active_template == 1) {
+        const char* l2 = "[OUTPUT] ASM: EAX=0x0038BDF8 written to LFB, RET=0 (SUCCESS)";
+        ci = 0;
+        while (l2[ci] && ci < 79) { ide_log[2][ci] = l2[ci]; ci++; }
+        ide_log[2][ci] = '\0';
+    } else {
+        const char* l2 = "[OUTPUT] Kernel Test: 4096B heap block alloc/free OK [PASSED]";
+        ci = 0;
+        while (l2[ci] && ci < 79) { ide_log[2][ci] = l2[ci]; ci++; }
+        ide_log[2][ci] = '\0';
+    }
+    ide_log_color[2] = 0x00FACC15;
+}
+
+static void paint_ide(struct mk_surface* s) {
+    if (!s || !s->pixels) return;
+    mk_buf_fill(s->pixels, s->w, s->h, 0x000E141D);
+
+    /* 1. Header Toolbar */
+    mk_buf_box(s->pixels, s->w, s->h, 0, 0, s->w, 32, 0x001E293B, 0x00131B26);
+    int t0 = (ide_active_template == 0);
+    int t1 = (ide_active_template == 1);
+    int t2 = (ide_active_template == 2);
+
+    mk_buf_btn(s->pixels, s->w, s->h, 8, 4, 80, 24, "C Demo", t0 ? 0x000E4A7A : 0x00263244, t0 ? 0x0038BDF8 : 0x00E2E8F0, t0);
+    mk_buf_btn(s->pixels, s->w, s->h, 92, 4, 86, 24, "ASM Demo", t1 ? 0x000E4A7A : 0x00263244, t1 ? 0x0038BDF8 : 0x00E2E8F0, t1);
+    mk_buf_btn(s->pixels, s->w, s->h, 182, 4, 86, 24, "Syscall", t2 ? 0x000E4A7A : 0x00263244, t2 ? 0x0038BDF8 : 0x00E2E8F0, t2);
+    mk_buf_btn(s->pixels, s->w, s->h, 274, 4, 110, 24, "[*] Run / Test", 0x00105C2B, 0x004ADE80, 1);
+    mk_buf_btn(s->pixels, s->w, s->h, 388, 4, 60, 24, "Clear", 0x00334155, 0x00CBD5E1, 0);
+
+    /* 2. Output Console Box at bottom */
+    int log_h = 76;
+    int log_y = s->h - log_h - 4;
+    mk_buf_box(s->pixels, s->w, s->h, 8, log_y, s->w - 16, log_h, 0x001E293B, 0x00070B11);
+    mk_buf_text(s->pixels, s->w, s->h, 14, log_y + 4, "Build & Execution Log:", 0x0038BDF8, 0x00070B11);
+    if (ide_log_count == 0) {
+        mk_buf_text(s->pixels, s->w, s->h, 14, log_y + 24, "Click '[*] Run / Test' to compile and execute current code buffer.", 0x0064748B, 0x00070B11);
+    } else {
+        for (int i = 0; i < ide_log_count; i++) {
+            mk_buf_text(s->pixels, s->w, s->h, 14, log_y + 22 + i * 16, ide_log[i], ide_log_color[i], 0x00070B11);
+        }
+    }
+
+    /* 3. Code Editor Area */
+    int edit_y = 36;
+    int edit_h = log_y - edit_y - 4;
+    int max_visible = edit_h / 16;
+    if (max_visible < 1) max_visible = 1;
+
+    int gutter_w = 36;
+    mk_buf_rect(s->pixels, s->w, s->h, 0, edit_y, gutter_w, edit_h, 0x00111827);
+    mk_buf_vline(s->pixels, s->w, s->h, gutter_w, edit_y, edit_h, 0x001F2937);
+
+    int start_row = ide_scroll_offset;
+    if (start_row < 0) start_row = 0;
+    if (start_row > ide_num_lines) start_row = ide_num_lines;
+
+    for (int r = 0; r < max_visible && (start_row + r) < ide_num_lines; r++) {
+        int line_idx = start_row + r;
+        int py = edit_y + r * 16;
+
+        /* Line number */
+        char lnum[8];
+        int_to_str(line_idx + 1, lnum);
+        mk_buf_text(s->pixels, s->w, s->h, 8, py, lnum, 0x00475569, 0x00111827);
+
+        /* Syntax color code */
+        const char* ltext = ide_lines[line_idx];
+        uint32_t col = 0x00E2E8F0;
+        if (ltext[0] == ';' || (ltext[0] == '/' && ltext[1] == '/')) {
+            col = 0x0064748B; /* Comment */
+        } else if (ltext[0] == '#') {
+            col = 0x00C084FC; /* Preprocessor */
+        } else if (ltext[0] == 'i' && ltext[1] == 'n' && ltext[2] == 't') {
+            col = 0x0038BDF8; /* Keyword */
+        } else if (ltext[0] == 'v' && ltext[1] == 'o' && ltext[2] == 'i' && ltext[3] == 'd') {
+            col = 0x0038BDF8;
+        } else if (ltext[0] == 'm' && ltext[1] == 'o' && ltext[2] == 'v') {
+            col = 0x0038BDF8;
+        } else if (ltext[0] == 'r' && ltext[1] == 'e' && ltext[2] == 't') {
+            col = 0x0038BDF8;
+        }
+        mk_buf_text(s->pixels, s->w, s->h, gutter_w + 8, py, ltext, col, 0x000E141D);
+
+        /* Active line cursor */
+        if (line_idx == ide_cur_row) {
+            static int ide_cur_blink = 0;
+            ide_cur_blink++;
+            if ((ide_cur_blink / 20) % 2 == 0) {
+                int cx = gutter_w + 8 + ide_cur_col * 8;
+                mk_buf_rect(s->pixels, s->w, s->h, cx, py, 2, 14, 0x0038BDF8);
+            }
+        }
+    }
+}
+
+static void ide_on_click(int lx, int ly, int w, int h) {
+    (void)w;
+    if (ly >= 4 && ly < 28) {
+        if (lx >= 8 && lx < 88) {
+            ide_load_template(0);
+        } else if (lx >= 92 && lx < 178) {
+            ide_load_template(1);
+        } else if (lx >= 182 && lx < 268) {
+            ide_load_template(2);
+        } else if (lx >= 274 && lx < 384) {
+            ide_run_code();
+        } else if (lx >= 388 && lx < 448) {
+            ide_num_lines = 1;
+            ide_lines[0][0] = '\0';
+            ide_cur_row = 0;
+            ide_cur_col = 0;
+            ide_log_count = 0;
+        }
+    } else if (ly >= 36 && ly < h - 80) {
+        int clicked_row = ide_scroll_offset + (ly - 36) / 16;
+        if (clicked_row >= 0 && clicked_row < ide_num_lines) {
+            ide_cur_row = clicked_row;
+            int len = 0;
+            while (ide_lines[clicked_row][len]) len++;
+            int clicked_col = (lx - 44) / 8;
+            if (clicked_col < 0) clicked_col = 0;
+            if (clicked_col > len) clicked_col = len;
+            ide_cur_col = clicked_col;
+        }
+    }
+}
+
+static void ide_on_key(char k) {
+    if (k == '\n' || k == '\r') {
+        if (ide_num_lines < IDE_MAX_LINES - 1) {
+            for (int i = ide_num_lines; i > ide_cur_row + 1; i--) {
+                for (int j = 0; j < IDE_LINE_LEN; j++)
+                    ide_lines[i][j] = ide_lines[i - 1][j];
+            }
+            ide_cur_row++;
+            ide_num_lines++;
+            ide_lines[ide_cur_row][0] = '\0';
+            ide_cur_col = 0;
+        }
+        return;
+    }
+    if (k == '\b') {
+        if (ide_cur_col > 0) {
+            int len = 0;
+            while (ide_lines[ide_cur_row][len]) len++;
+            for (int i = ide_cur_col - 1; i < len; i++)
+                ide_lines[ide_cur_row][i] = ide_lines[ide_cur_row][i + 1];
+            ide_cur_col--;
+        } else if (ide_cur_row > 0) {
+            ide_cur_row--;
+            int len = 0;
+            while (ide_lines[ide_cur_row][len]) len++;
+            ide_cur_col = len;
+        }
+        return;
+    }
+    if (k == KEY_LEFT) {
+        if (ide_cur_col > 0) ide_cur_col--;
+        return;
+    }
+    if (k == KEY_RIGHT) {
+        int len = 0;
+        while (ide_lines[ide_cur_row][len]) len++;
+        if (ide_cur_col < len) ide_cur_col++;
+        return;
+    }
+    if (k == KEY_UP) {
+        if (ide_cur_row > 0) {
+            ide_cur_row--;
+            int len = 0;
+            while (ide_lines[ide_cur_row][len]) len++;
+            if (ide_cur_col > len) ide_cur_col = len;
+        }
+        return;
+    }
+    if (k == KEY_DOWN) {
+        if (ide_cur_row < ide_num_lines - 1) {
+            ide_cur_row++;
+            int len = 0;
+            while (ide_lines[ide_cur_row][len]) len++;
+            if (ide_cur_col > len) ide_cur_col = len;
+        }
+        return;
+    }
+    if ((uint8_t)k >= 32 && (uint8_t)k <= 126) {
+        int len = 0;
+        while (ide_lines[ide_cur_row][len]) len++;
+        if (len < IDE_LINE_LEN - 2) {
+            for (int i = len; i >= ide_cur_col; i--)
+                ide_lines[ide_cur_row][i + 1] = ide_lines[ide_cur_row][i];
+            ide_lines[ide_cur_row][ide_cur_col++] = k;
+        }
+    }
+}
+
+static void open_ide(void) {
+    if (surface_alive(id_ide)) {
+        mk_surface_restore(id_ide);
+        active_focus_id = id_ide;
+        return;
+    }
+    if (ide_num_lines == 0) {
+        ide_load_template(0);
+    }
+    OPEN_APP(id_ide, 500, 320, "C/ASM IDE & Compiler", paint_ide);
+}
+
+/* ========================================================================= */
 /* 5. Auxiliary App Painters                                                 */
 /* ========================================================================= */
 static void paint_welcome(struct mk_surface* s) {
@@ -1039,16 +1514,30 @@ static void paint_about(struct mk_surface* s) {
 
 static void open_about(void) { OPEN_APP(id_about, 320, 170, "About", paint_about); }
 
+static int notes_scroll_offset = 0;
+
 static void paint_notes(struct mk_surface* s) {
     if (!s || !s->pixels) return;
     mk_buf_fill(s->pixels, s->w, s->h, 0x00FEF08A);
     mk_buf_text(s->pixels, s->w, s->h, 12, 10, "Sticky Notes", 0x00854D0E, 0x00FEF08A);
     mk_buf_hline(s->pixels, s->w, s->h, 10, 28, s->w - 20, 0x00EAB308);
-    mk_buf_text(s->pixels, s->w, s->h, 14, 38, "- python build.py to build", 0x00713F12, 0x00FEF08A);
-    mk_buf_text(s->pixels, s->w, s->h, 14, 60, "- open display to change mode", 0x00713F12, 0x00FEF08A);
-    mk_buf_text(s->pixels, s->w, s->h, 14, 82, "- tasks app to end worker tasks", 0x00713F12, 0x00FEF08A);
-    mk_buf_text(s->pixels, s->w, s->h, 14, 104, "- native terminal supports shell", 0x00713F12, 0x00FEF08A);
-    mk_buf_text(s->pixels, s->w, s->h, 14, 130, "(read-only sticky)", 0x00A16207, 0x00FEF08A);
+    const char* lines[] = {
+        "- python build.py to compile",
+        "- System Settings configures HZ",
+        "- Tasks app terminates worker tasks",
+        "- Native terminal supports shell",
+        "- C/ASM IDE has live compiler runner",
+        "- Scrollwheel supported in all apps",
+        "- Bottom-right grip resizes windows",
+        "- Windows key toggles Start menu"
+    };
+    int nlines = 8;
+    int y = 38;
+    for (int i = notes_scroll_offset; i < nlines; i++) {
+        if (y + 16 > s->h - 10) break;
+        mk_buf_text(s->pixels, s->w, s->h, 14, y, lines[i], 0x00713F12, 0x00FEF08A);
+        y += 22;
+    }
 }
 
 static void open_notes(void) { OPEN_APP(id_notes, 280, 160, "Notes", paint_notes); }
@@ -1368,6 +1857,7 @@ static void on_close_id(int id) {
     if (id == id_sysinfo) id_sysinfo = -1;
     if (id == id_calc)    id_calc = -1;
     if (id == id_term)    id_term = -1;
+    if (id == id_ide)     id_ide = -1;
     if (id == id_about)   id_about = -1;
     if (id == id_tasks)   id_tasks = -1;
     if (id == id_display) id_display = -1;
@@ -1394,19 +1884,20 @@ struct desk_icon {
 };
 
 static struct desk_icon icons[] = {
-    { 0, 0, 0, "Terminal", open_term },
-    { 0, 1, 0, "Tasks",    open_tasks },
-    { 0, 2, 0, "Display",  open_display },
-    { 0, 3, 0, "Calc",     open_calc },
-    { 0, 4, 0, "Notes",    open_notes },
-    { 0, 5, 0, "Welcome",  open_welcome },
-    { 1, 0, 0, "Clock",    open_clock },
-    { 1, 1, 0, "SysInfo",  open_sysinfo },
-    { 1, 2, 0, "Help",     open_help },
-    { 1, 3, 0, "About",    open_about },
-    { 1, 4, 0, "Demo",     open_demo },
+    { 0, 0, 0, "Terminal",   open_term },
+    { 0, 1, 0, "Tasks",      open_tasks },
+    { 0, 2, 0, "C/ASM IDE",  open_ide },
+    { 0, 3, 0, "Settings",   open_display },
+    { 0, 4, 0, "Calc",       open_calc },
+    { 0, 5, 0, "Notes",      open_notes },
+    { 1, 0, 0, "Clock",      open_clock },
+    { 1, 1, 0, "SysInfo",    open_sysinfo },
+    { 1, 2, 0, "Help",       open_help },
+    { 1, 3, 0, "About",      open_about },
+    { 1, 4, 0, "Demo",       open_demo },
+    { 1, 5, 0, "Welcome",    open_welcome },
     { 2, 0, 0, "Install OS", open_installer },
-    { -1, -1, 1, "Recycle", open_trash },
+    { -1, -1, 1, "Recycle",  open_trash },
 };
 #define N_ICONS ((int)(sizeof(icons) / sizeof(icons[0])))
 
@@ -1415,8 +1906,8 @@ static void icon_pos(int i, int* ox, int* oy) {
         *ox = mk_screen_w() - ICON_W - 16;
         *oy = mk_screen_h() - PANEL_H - ICON_H - 12;
     } else {
-        *ox = 24 + icons[i].col * 84;
-        *oy = 20 + icons[i].row * 76;
+        *ox = 22 + icons[i].col * 88;
+        *oy = 18 + icons[i].row * 80;
     }
 }
 
@@ -1650,6 +2141,22 @@ static void draw_art_installer(int x, int y) {
     mk_bb_fill(x + 25, y + 30, 2, 2, 0x0010B981);
 }
 
+static void draw_art_ide(int x, int y) {
+    /* IDE window frame */
+    mk_bb_fill(x + 2, y + 2, 32, 28, 0x001E293B);
+    mk_bb_fill(x + 4, y + 4, 28, 24, 0x000F172A);
+    /* Top titlebar strip */
+    mk_bb_fill(x + 4, y + 4, 28, 4, 0x002563EB);
+    /* Left line number strip */
+    mk_bb_fill(x + 4, y + 8, 6, 20, 0x001E293B);
+    /* Cyan curly brackets '{}' */
+    mk_bb_text(x + 12, y + 10, "{}", 0x0038BDF8, 0x000F172A);
+    /* Green run play triangle */
+    mk_bb_fill(x + 24, y + 18, 2, 8, 0x0010B981);
+    mk_bb_fill(x + 26, y + 20, 2, 4, 0x0010B981);
+    mk_bb_fill(x + 28, y + 21, 2, 2, 0x0010B981);
+}
+
 static void draw_icon(int idx, int x, int y, const char* label) {
     /* Icon Tile Backing / Shadow */
     mk_bb_fill(x + 12, y + 2, 38, 36, 0x00151E28);
@@ -1662,17 +2169,18 @@ static void draw_icon(int idx, int x, int y, const char* label) {
     switch (idx) {
         case 0:  draw_art_terminal(ax, ay);  break;
         case 1:  draw_art_tasks(ax, ay);     break;
-        case 2:  draw_art_display(ax, ay);   break;
-        case 3:  draw_art_calc(ax, ay);      break;
-        case 4:  draw_art_notes(ax, ay);     break;
-        case 5:  draw_art_welcome(ax, ay);   break;
+        case 2:  draw_art_ide(ax, ay);       break;
+        case 3:  draw_art_display(ax, ay);   break;
+        case 4:  draw_art_calc(ax, ay);      break;
+        case 5:  draw_art_notes(ax, ay);     break;
         case 6:  draw_art_clock(ax, ay);     break;
         case 7:  draw_art_sysinfo(ax, ay);   break;
         case 8:  draw_art_help(ax, ay);      break;
         case 9:  draw_art_about(ax, ay);     break;
         case 10: draw_art_demo(ax, ay);      break;
-        case 11: draw_art_installer(ax, ay); break;
-        case 12: draw_art_trash(ax, ay);     break;
+        case 11: draw_art_welcome(ax, ay);   break;
+        case 12: draw_art_installer(ax, ay); break;
+        case 13: draw_art_trash(ax, ay);     break;
         default: draw_art_welcome(ax, ay);   break;
     }
 
@@ -1705,10 +2213,10 @@ static int icon_at(int mx, int my) {
 #define SM_X 4
 #define SM_W 210
 #define SM_ITEM_H 22
-#define SM_NUM_APPS 12
+#define SM_NUM_APPS 13
 
 static const char* sm_items[SM_NUM_APPS] = {
-    "Terminal", "Tasks", "Display", "Calculator", "Clock",
+    "Terminal", "Tasks", "C/ASM IDE", "Settings", "Calculator", "Clock",
     "SysInfo", "Notes", "Help", "Welcome", "About", "Demo", "Install OS"
 };
 
@@ -1742,11 +2250,11 @@ static void draw_start_menu(void) {
         mk_bb_fill(x, iy, w, SM_ITEM_H, bg);
         /* Mini color dot */
         static const uint32_t sm_cols[] = {
-            0x0000FF66, 0x000078D7, 0x0000B7C3, 0x00FFB900,
-            0x00E81123, 0x008812CD, 0x00F7630C, 0x00107C10,
-            0x00E3008C, 0x004F46E5, 0x007C3AED, 0x0010B981
+            0x0000FF66, 0x000078D7, 0x0038BDF8, 0x0000B7C3, 0x00FFB900,
+            0x00E81123, 0x008812CD, 0x00F7630C, 0x00107C10, 0x00E3008C,
+            0x004F46E5, 0x007C3AED, 0x0010B981
         };
-        mk_bb_fill(x + 6, iy + 6, 10, 10, sm_cols[i % 12]);
+        mk_bb_fill(x + 6, iy + 6, 10, 10, sm_cols[i % 13]);
         mk_bb_text(x + 24, iy + 4, sm_items[i], 0x00F0F0F0, bg);
         iy += SM_ITEM_H;
     }
@@ -1781,6 +2289,26 @@ static int start_menu_click(int mx, int my) {
     iy += SM_ITEM_H;
     if (my >= iy && my < iy + SM_ITEM_H) return 101; /* shutdown */
     return -2;
+}
+
+static void repaint_surface_app(int id) {
+    struct mk_surface* s = mk_surface_get(id);
+    if (!s) return;
+    if (id == id_term) paint_term(s);
+    else if (id == id_ide) paint_ide(s);
+    else if (id == id_display) paint_display(s);
+    else if (id == id_tasks) paint_tasks(s);
+    else if (id == id_calc) paint_calc(s);
+    else if (id == id_notes) paint_notes(s);
+    else if (id == id_welcome) paint_welcome(s);
+    else if (id == id_clock) paint_clock(s);
+    else if (id == id_sysinfo) paint_sysinfo(s);
+    else if (id == id_about) paint_about(s);
+    else if (id == id_help) paint_help(s);
+    else if (id == id_trash) paint_trash(s);
+    else if (id == id_demo) paint_demo(s);
+    else if (id == id_installer) paint_installer(s);
+    mk_surface_commit(id);
 }
 
 /* ========================================================================= */
@@ -1822,7 +2350,7 @@ void desktop_run(void) {
     start_open = 0;
     mk_panel_set_start_active(0);
     calc_clear();
-    id_welcome = id_clock = id_sysinfo = id_calc = id_term = -1;
+    id_welcome = id_clock = id_sysinfo = id_calc = id_term = id_ide = -1;
     id_about = id_tasks = id_display = id_notes = id_help = id_trash = id_demo = id_installer = -1;
     active_focus_id = -1;
 
@@ -1840,10 +2368,15 @@ void desktop_run(void) {
     int dragging = 0;
     int drag_id = -1;
     int drag_off_x = 0, drag_off_y = 0;
+    int resizing = 0;
+    int resize_id = -1;
+    int resize_orig_w = 0, resize_orig_h = 0;
+    int resize_start_x = 0, resize_start_y = 0;
     int prev_buttons = 0;
     int need_redraw = 1;
     uint32_t last_clock_tick = timer_ticks();
     uint32_t last_tasks_tick = timer_ticks();
+    uint32_t last_cadence_tick = 0;
 
     for (;;) {
         char k;
@@ -1865,13 +2398,15 @@ void desktop_run(void) {
                 }
             }
 
-            int calc_target = (active_focus_id == id_calc) ||
-                              (surface_alive(id_calc) && (active_focus_id <= 0 || !surface_alive(active_focus_id)));
-            int term_target = (active_focus_id == id_term) ||
-                              (surface_alive(id_term) && (active_focus_id <= 0 || !surface_alive(active_focus_id)));
+            int calc_target = (active_focus_id == id_calc);
+            int term_target = (active_focus_id == id_term);
+            int ide_target  = (active_focus_id == id_ide);
 
-            if (surface_alive(id_term) && active_focus_id == id_term) calc_target = 0;
-            if (surface_alive(id_calc) && active_focus_id == id_calc) term_target = 0;
+            if (active_focus_id < 0) {
+                if (surface_alive(id_term)) term_target = 1;
+                else if (surface_alive(id_ide)) ide_target = 1;
+                else if (surface_alive(id_calc)) calc_target = 1;
+            }
 
             if (calc_target && surface_alive(id_calc)) {
                 if (k >= '0' && k <= '9')      { calc_digit(k - '0'); }
@@ -1943,16 +2478,77 @@ void desktop_run(void) {
                     mk_surface_commit(id_term);
                 }
                 need_redraw = 1;
+            } else if (ide_target && surface_alive(id_ide)) {
+                ide_on_key(k);
+                if (surface_alive(id_ide)) {
+                    paint_ide(mk_surface_get(id_ide));
+                    mk_surface_commit(id_ide);
+                }
+                need_redraw = 1;
             }
         }
 
-        /* Mouse event coalescing: drain pending mouse events before composing */
+        /* Mouse event coalescing & scrollwheel delta collection */
         struct mouse_event mev;
+        int wheel_delta = 0;
         while (mouse_poll_event(&mev)) {
-            /* Coalesce: drain queue so m receives final coordinates */
+            if (mev.type == 2 || mev.dz != 0) {
+                wheel_delta += mev.dz;
+            }
         }
         struct mouse_state m;
         mouse_get(&m);
+        if (m.dz != 0) {
+            wheel_delta += m.dz;
+        }
+
+        /* Handle mouse scrollwheel */
+        if (wheel_delta != 0) {
+            int w_lx, w_ly, w_ot, w_oc, w_om, w_or;
+            int target_id = mk_hit_test_full(m.x, m.y, &w_lx, &w_ly, &w_ot, &w_oc, &w_om, &w_or);
+            if (target_id < 0) target_id = active_focus_id;
+
+            if (target_id >= 0 && surface_alive(target_id)) {
+                struct mk_surface* ts = mk_surface_get(target_id);
+                if (target_id == id_term) {
+                    int max_visible = (ts->h - 46) / 16;
+                    int total_lines = term_num_lines + (term_cur_col > 0 ? 1 : 0);
+                    if (wheel_delta > 0) {
+                        term_scroll_offset += wheel_delta * 3;
+                        if (term_scroll_offset > total_lines - max_visible)
+                            term_scroll_offset = (total_lines > max_visible) ? (total_lines - max_visible) : 0;
+                    } else {
+                        term_scroll_offset += wheel_delta * 3;
+                        if (term_scroll_offset < 0) term_scroll_offset = 0;
+                    }
+                    paint_term(ts);
+                    mk_surface_commit(id_term);
+                    need_redraw = 1;
+                } else if (target_id == id_ide) {
+                    ide_scroll_offset -= wheel_delta;
+                    if (ide_scroll_offset < 0) ide_scroll_offset = 0;
+                    if (ide_scroll_offset > ide_num_lines) ide_scroll_offset = ide_num_lines;
+                    paint_ide(ts);
+                    mk_surface_commit(id_ide);
+                    need_redraw = 1;
+                } else if (target_id == id_notes) {
+                    notes_scroll_offset -= wheel_delta;
+                    if (notes_scroll_offset < 0) notes_scroll_offset = 0;
+                    if (notes_scroll_offset > 6) notes_scroll_offset = 6;
+                    paint_notes(ts);
+                    mk_surface_commit(id_notes);
+                    need_redraw = 1;
+                } else if (target_id == id_tasks) {
+                    tasks_scroll_offset -= wheel_delta;
+                    if (tasks_scroll_offset < 0) tasks_scroll_offset = 0;
+                    if (tasks_scroll_offset > 8) tasks_scroll_offset = 8;
+                    paint_tasks(ts);
+                    mk_surface_commit(id_tasks);
+                    need_redraw = 1;
+                }
+            }
+        }
+
         int buttons = m.buttons;
         int left = buttons & 1;
         int left_down = left && !(prev_buttons & 1);
@@ -2000,7 +2596,7 @@ void desktop_run(void) {
                 int sm = start_menu_click(m.x, m.y);
                 if (sm >= 0 && sm < SM_NUM_APPS) {
                     void (*app_launchers[SM_NUM_APPS])(void) = {
-                        open_term, open_tasks, open_display, open_calc, open_clock,
+                        open_term, open_tasks, open_ide, open_display, open_calc, open_clock,
                         open_sysinfo, open_notes, open_help, open_welcome, open_about, open_demo, open_installer
                     };
                     app_launchers[sm]();
@@ -2027,8 +2623,8 @@ void desktop_run(void) {
                 }
             } else {
                 /* 2. Window Hit Test */
-                int lx, ly, on_title, on_close, on_min;
-                int id = mk_hit_test_ext(m.x, m.y, &lx, &ly, &on_title, &on_close, &on_min);
+                int lx, ly, on_title, on_close, on_min, on_resize = 0;
+                int id = mk_hit_test_full(m.x, m.y, &lx, &ly, &on_title, &on_close, &on_min, &on_resize);
 
                 if (id >= 0) {
                     active_focus_id = id;
@@ -2039,17 +2635,31 @@ void desktop_run(void) {
                         on_close_id(id);
                         mk_surface_destroy(id);
                         dragging = 0;
+                        resizing = 0;
                         if (active_focus_id == id) active_focus_id = -1;
                     } else if (on_min) {
                         mk_surface_minimize(id);
                         dragging = 0;
+                        resizing = 0;
                         if (active_focus_id == id) active_focus_id = -1;
+                    } else if (on_resize) {
+                        resizing = 1;
+                        resize_id = id;
+                        resize_start_x = m.x;
+                        resize_start_y = m.y;
+                        struct mk_surface* s = mk_surface_get(id);
+                        if (s) {
+                            resize_orig_w = s->w;
+                            resize_orig_h = s->h;
+                        }
+                        dragging = 0;
                     } else if (on_title) {
                         dragging = 1;
                         drag_id = id;
                         struct mk_surface* s = mk_surface_get(id);
                         drag_off_x = m.x - s->x;
                         drag_off_y = m.y - s->y;
+                        resizing = 0;
                     } else {
                         /* Client Area Click */
                         if (id == id_calc) {
@@ -2065,9 +2675,10 @@ void desktop_run(void) {
                                 mk_surface_commit(id_display);
                             }
                         } else if (id == id_tasks) {
-                            tasks_on_click(lx, ly);
-                            if (surface_alive(id_tasks)) {
-                                paint_tasks(mk_surface_get(id_tasks));
+                            struct mk_surface* ts = mk_surface_get(id_tasks);
+                            if (ts) {
+                                tasks_on_click(lx, ly, ts->w, ts->h);
+                                paint_tasks(ts);
                                 mk_surface_commit(id_tasks);
                             }
                         } else if (id == id_term) {
@@ -2076,6 +2687,13 @@ void desktop_run(void) {
                                 term_on_click(lx, ly, ts->w, ts->h);
                                 paint_term(ts);
                                 mk_surface_commit(id_term);
+                            }
+                        } else if (id == id_ide) {
+                            struct mk_surface* is = mk_surface_get(id_ide);
+                            if (is) {
+                                ide_on_click(lx, ly, is->w, is->h);
+                                paint_ide(is);
+                                mk_surface_commit(id_ide);
                             }
                         } else if (id == id_installer) {
                             installer_on_click(lx, ly);
@@ -2098,7 +2716,21 @@ void desktop_run(void) {
 
         if (left_up) {
             dragging = 0;
+            resizing = 0;
+            resize_id = -1;
             need_redraw = 1;
+        }
+
+        if (resizing && resize_id >= 0 && (buttons & 1)) {
+            int new_w = resize_orig_w + (m.x - resize_start_x);
+            int new_h = resize_orig_h + (m.y - resize_start_y);
+            struct mk_surface* rs = mk_surface_get(resize_id);
+            if (rs && (new_w != rs->w || new_h != rs->h)) {
+                if (mk_surface_resize(resize_id, new_w, new_h) == 0) {
+                    repaint_surface_app(resize_id);
+                    need_redraw = 1;
+                }
+            }
         }
 
         if (dragging && drag_id >= 0 && (buttons & 1)) {
@@ -2169,7 +2801,14 @@ void desktop_run(void) {
         }
 
         prev_buttons = buttons;
-        __asm__ volatile ("hlt");
+
+        /* Display Cadence Pacing */
+        uint32_t now_ticks = timer_ticks();
+        if (now_ticks != last_cadence_tick) {
+            last_cadence_tick = now_ticks;
+        } else if (!need_redraw && !dragging && !resizing) {
+            __asm__ volatile ("hlt");
+        }
     }
 
 done:

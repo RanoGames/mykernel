@@ -142,6 +142,48 @@ int mk_surface_create(int w, int h, const char* title) {
     return id;
 }
 
+int mk_surface_resize(int id, int new_w, int new_h) {
+    if (id < 0 || id >= MK_MAX_SURFACES || !g_surf[id].used) return -1;
+
+    if (new_w < 100) new_w = 100;
+    if (new_h < 50)  new_h = 50;
+    if (new_w > g_sw) new_w = g_sw;
+    if (new_h > g_sh - MK_TITLE_H - MK_PANEL_H)
+        new_h = g_sh - MK_TITLE_H - MK_PANEL_H;
+
+    if (g_surf[id].x + new_w > g_sw)
+        new_w = g_sw - g_surf[id].x;
+    if (g_surf[id].y + MK_TITLE_H + new_h > g_sh - MK_PANEL_H)
+        new_h = g_sh - MK_PANEL_H - MK_TITLE_H - g_surf[id].y;
+
+    if (new_w < 80) new_w = 80;
+    if (new_h < 40) new_h = 40;
+
+    if (new_w == g_surf[id].w && new_h == g_surf[id].h)
+        return 0;
+
+    size_t bytes = (size_t)new_w * (size_t)new_h * 4u;
+    uint32_t* new_pix = (uint32_t*)kmalloc(bytes);
+    if (!new_pix) return -1;
+
+    for (int r = 0; r < new_h; r++) {
+        for (int c = 0; c < new_w; c++) {
+            if (r < g_surf[id].h && c < g_surf[id].w && g_surf[id].pixels) {
+                new_pix[r * new_w + c] = g_surf[id].pixels[r * g_surf[id].w + c];
+            } else {
+                new_pix[r * new_w + c] = 0x00C0C0C0;
+            }
+        }
+    }
+
+    if (g_surf[id].pixels) kfree(g_surf[id].pixels);
+    g_surf[id].pixels = new_pix;
+    g_surf[id].w = new_w;
+    g_surf[id].h = new_h;
+    g_surf[id].dirty = 1;
+    return 0;
+}
+
 void mk_surface_destroy(int id) {
     if (id < 0 || id >= MK_MAX_SURFACES || !g_surf[id].used) return;
     if (g_surf[id].pixels) kfree(g_surf[id].pixels);
@@ -354,6 +396,18 @@ static void draw_window(struct mk_surface* s, int focused) {
                 if ((unsigned)xx >= (unsigned)g_sw) continue;
                 bb_put(xx, yy, s->pixels[row * s->w + col]);
             }
+        }
+    }
+
+    /* Bottom-right diagonal resize grip dots/stripes */
+    int rx_corner = fx + fw - 1;
+    int ry_corner = fy + fh - 1;
+    uint32_t grip_hi = focused ? 0x00CBD5E1 : 0x0094A3B8;
+    uint32_t grip_lo = focused ? 0x001E293B : 0x000F172A;
+    for (int d = 3; d <= 9; d += 3) {
+        for (int k = 0; k <= d; k++) {
+            bb_put(rx_corner - k, ry_corner - (d - k), grip_hi);
+            bb_put(rx_corner - k + 1, ry_corner - (d - k) + 1, grip_lo);
         }
     }
 }
@@ -755,12 +809,13 @@ void mk_compose_rect(int rx0, int ry0, int rx1, int ry1) {
     }
 }
 
-int mk_hit_test_ext(int sx, int sy, int* local_x, int* local_y, int* on_title, int* on_close, int* on_min) {
+int mk_hit_test_full(int sx, int sy, int* local_x, int* local_y, int* on_title, int* on_close, int* on_min, int* on_resize) {
     if (local_x) *local_x = 0;
     if (local_y) *local_y = 0;
     if (on_title) *on_title = 0;
     if (on_close) *on_close = 0;
     if (on_min) *on_min = 0;
+    if (on_resize) *on_resize = 0;
 
     for (int z = g_z_count - 1; z >= 0; z--) {
         int i = g_z_order[z];
@@ -783,12 +838,20 @@ int mk_hit_test_ext(int sx, int sy, int* local_x, int* local_y, int* on_title, i
                 if (on_min) *on_min = 1;
             }
         } else {
+            /* Check bottom-right 14x14 corner for resize grip */
+            if (sx >= x1 - 14 && sx < x1 && sy >= y1 - 14 && sy < y1) {
+                if (on_resize) *on_resize = 1;
+            }
             if (local_x) *local_x = sx - x0;
             if (local_y) *local_y = sy - (y0 + MK_TITLE_H);
         }
         return i;
     }
     return -1;
+}
+
+int mk_hit_test_ext(int sx, int sy, int* local_x, int* local_y, int* on_title, int* on_close, int* on_min) {
+    return mk_hit_test_full(sx, sy, local_x, local_y, on_title, on_close, on_min, 0);
 }
 
 int mk_hit_test(int sx, int sy, int* local_x, int* local_y, int* on_title, int* on_close) {

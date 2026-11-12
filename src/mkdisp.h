@@ -9,7 +9,7 @@
 #define VBE_MODE_1920x1080 3
 #endif
 
-#define MK_MAX_SURFACES  8
+#define MK_MAX_SURFACES  24
 #define MK_TITLE_H       24
 #define MK_PANEL_H       28
 #define MK_CURSOR_W      12
@@ -31,6 +31,7 @@ int  mk_switch_resolution(int vbe_mode_id);
 
 /* Create surface; returns id >= 0 or -1. Allocates pixel buffer via kmalloc. */
 int  mk_surface_create(int w, int h, const char* title);
+int  mk_surface_resize(int id, int new_w, int new_h);
 void mk_surface_destroy(int id);
 void mk_surface_move(int id, int x, int y);
 void mk_surface_raise(int id);
@@ -52,6 +53,7 @@ void mk_cursor_invalidate(void);
 /* Hit-test: topmost surface under (sx,sy), including title bar. Returns id or -1. */
 int  mk_hit_test(int sx, int sy, int* local_x, int* local_y, int* on_title, int* on_close);
 int  mk_hit_test_ext(int sx, int sy, int* local_x, int* local_y, int* on_title, int* on_close, int* on_min);
+int  mk_hit_test_full(int sx, int sy, int* local_x, int* local_y, int* on_title, int* on_close, int* on_min, int* on_resize);
 
 int  mk_screen_w(void);
 int  mk_screen_h(void);
