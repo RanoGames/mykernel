@@ -174,6 +174,7 @@ void terminal_disable_fb(void) {
     if (!fb_mode) return;
     fb_mode = 0;
     vbe_disable();
+    gfx_restore_text();
     term_cols = VGA_TEXT_W;
     term_rows = VGA_TEXT_H;
     terminal_buffer = (uint16_t*)VGA_ADDRESS;

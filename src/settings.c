@@ -120,6 +120,7 @@ static void print_mode_name(int m) {
     if (m == 0) terminal_writestring("640x480");
     else if (m == 1) terminal_writestring("800x600");
     else if (m == 2) terminal_writestring("1024x768");
+    else if (m == 3) terminal_writestring("1920x1080");
     else terminal_writestring("?");
 }
 
@@ -154,11 +155,10 @@ static char settings_wait_key(void) {
 
 void settings_menu(void) {
     /* Restore text only if we were in graphics/FB — full CRTC rewrite is slow */
+    int was_fb = terminal_fb_active();
     terminal_disable_fb();
-    if (gfx_is_graphics() || platform_is_virtualbox()) {
-        /* VBox: cheap path — just ensure text buffer is writable */
-        if (gfx_is_graphics())
-            gfx_restore_text();
+    if (was_fb || gfx_is_graphics() || platform_is_virtualbox()) {
+        gfx_restore_text();
     }
     kbd_drain();
 
