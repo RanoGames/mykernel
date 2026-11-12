@@ -5,6 +5,7 @@
 #include "vga.h"
 #include "vfs.h"
 #include "keyboard.h"
+#include "timer.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -432,24 +433,52 @@ void install_wizard(void) {
     terminal_writestring("  [1] Hybrid MBR + GPT (Recommended: BIOS boot + GPT compliance)\n");
     terminal_writestring("  [2] Traditional MBR (Legacy BIOS)\n");
     terminal_writestring("  [3] Pure GPT + Protective MBR (UEFI)\n");
-    terminal_writestring("Press 1, 2, or 3 (Proceeding with default [1] in 2 seconds...)\n\n");
+    terminal_writestring("  [Q] Cancel installation\n\n");
+    terminal_writestring("Press 1, 2, 3, or Enter for [1] (auto-proceed in 15s): 15s...");
+
+    uint32_t hz = timer_hz();
+    if (hz == 0) hz = 100;
+    uint32_t start_tick = timer_ticks();
+    int timeout_sec = 15;
+    int last_remaining = timeout_sec;
 
     int mode = INSTALL_MODE_HYBRID;
-    for (int t = 0; t < 2000000; t++) {
+    for (;;) {
         char c = 0;
         if (keyboard_trygetchar(&c)) {
-            if (c == '2') { mode = INSTALL_MODE_MBR; break; }
-            if (c == '3') { mode = INSTALL_MODE_GPT; break; }
-            if (c == '1' || c == '\n') { mode = INSTALL_MODE_HYBRID; break; }
+            if (c == '1' || c == '\n' || c == '\r') {
+                mode = INSTALL_MODE_HYBRID;
+                terminal_writestring("\nSelected: [1] Hybrid MBR + GPT\n\n");
+                break;
+            } else if (c == '2') {
+                mode = INSTALL_MODE_MBR;
+                terminal_writestring("\nSelected: [2] Traditional MBR\n\n");
+                break;
+            } else if (c == '3') {
+                mode = INSTALL_MODE_GPT;
+                terminal_writestring("\nSelected: [3] Pure GPT\n\n");
+                break;
+            } else if (c == 'q' || c == 'Q' || c == 0x1B) {
+                terminal_writestring("\nInstallation cancelled by user.\n\n");
+                return;
+            }
         }
+        uint32_t elapsed_sec = (timer_ticks() - start_tick) / hz;
+        if (elapsed_sec >= (uint32_t)timeout_sec) {
+            terminal_writestring("\nAuto-proceeding with default [1] Hybrid MBR + GPT\n\n");
+            mode = INSTALL_MODE_HYBRID;
+            break;
+        }
+        int remaining = timeout_sec - (int)elapsed_sec;
+        if (remaining != last_remaining) {
+            last_remaining = remaining;
+            terminal_writestring("\b\b\b\b\b\b");
+            if (remaining < 10) terminal_putchar(' ');
+            terminal_write_uint(remaining);
+            terminal_writestring("s...");
+        }
+        __asm__ volatile ("hlt");
     }
-
-    if (mode == INSTALL_MODE_MBR)
-        terminal_writestring("Selected: [2] Traditional MBR\n\n");
-    else if (mode == INSTALL_MODE_GPT)
-        terminal_writestring("Selected: [3] Pure GPT\n\n");
-    else
-        terminal_writestring("Selected: [1] Hybrid MBR + GPT\n\n");
 
     int res = install_run_mode(mode);
     if (res == 0) {
